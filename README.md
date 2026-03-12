@@ -18,11 +18,11 @@ If `q` is a URL (starts with `http://` or `https://`), PageLeft will fetch the p
 
 ### Federated workers
 
-Workers donate crawl and embedding compute. The flow:
+Workers donate crawl and embedding compute. Check `GET /api/stats` for the current `embedding_model` and `embedding_dim` before computing embeddings — submissions with the wrong dimension are rejected.
 
 1. `GET /api/frontier?limit=10` — claim URLs to crawl
 2. `POST /api/contribute/page` — submit crawled page (license is re-verified server-side)
-3. `GET /api/work/embed?limit=10` — claim chunks that need embeddings (returns `chunk_id`, `page_id`, `text`)
+3. `GET /api/work/embed?limit=10` — claim chunks that need embeddings (returns `model`, `dim`, and `items` with `chunk_id`, `page_id`, `text`)
 4. `POST /api/contribute/embedding` — submit computed embedding (with `chunk_id` or `page_id` for backward compat)
 
 ## Contributing
