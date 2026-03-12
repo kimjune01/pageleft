@@ -108,7 +108,7 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleWorkEmbed returns pages that need embeddings computed.
+// handleWorkEmbed returns chunks (or pages) that need embeddings computed.
 // GET /api/work/embed?limit=10
 func (h *Handler) handleWorkEmbed(w http.ResponseWriter, r *http.Request) {
 	limit := 10
@@ -118,6 +118,28 @@ func (h *Handler) handleWorkEmbed(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Prefer chunk work items
+	chunks, err := h.db.ChunksWithoutEmbeddings(limit)
+	if err == nil && len(chunks) > 0 {
+		type chunkWork struct {
+			ChunkID int64  `json:"chunk_id"`
+			PageID  int64  `json:"page_id"`
+			Text    string `json:"text"`
+		}
+		out := make([]chunkWork, len(chunks))
+		for i, c := range chunks {
+			out[i] = chunkWork{
+				ChunkID: c.ID,
+				PageID:  c.PageID,
+				Text:    c.Text,
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(out)
+		return
+	}
+
+	// Fallback to page-level work
 	pages, err := h.db.PagesWithoutEmbeddings(limit)
 	if err != nil {
 		http.Error(w, `{"error":"database error"}`, http.StatusInternalServerError)
@@ -132,7 +154,6 @@ func (h *Handler) handleWorkEmbed(w http.ResponseWriter, r *http.Request) {
 	out := make([]embedWork, len(pages))
 	for i, p := range pages {
 		text := p.TextContent
-		// Send first 500 words to limit payload size
 		words := strings.Fields(text)
 		if len(words) > 500 {
 			text = strings.Join(words[:500], " ")
@@ -151,10 +172,12 @@ func (h *Handler) handleWorkEmbed(w http.ResponseWriter, r *http.Request) {
 // embeddingSubmission is the JSON body for POST /api/contribute/embedding.
 type embeddingSubmission struct {
 	PageID    int64     `json:"page_id"`
+	ChunkID   int64     `json:"chunk_id"`
 	Embedding []float64 `json:"embedding"`
 }
 
 // handleContributeEmbedding accepts an embedding from a federated worker.
+// Supports both chunk_id (new) and page_id (backward compat).
 // POST /api/contribute/embedding
 func (h *Handler) handleContributeEmbedding(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1*1024*1024))
@@ -169,13 +192,23 @@ func (h *Handler) handleContributeEmbedding(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if sub.PageID == 0 || len(sub.Embedding) == 0 {
-		http.Error(w, `{"error":"page_id and embedding are required"}`, http.StatusBadRequest)
+	if len(sub.Embedding) == 0 {
+		http.Error(w, `{"error":"embedding is required"}`, http.StatusBadRequest)
 		return
 	}
 
-	if err := h.db.UpdateEmbedding(sub.PageID, sub.Embedding); err != nil {
-		http.Error(w, `{"error":"update failed"}`, http.StatusInternalServerError)
+	if sub.ChunkID != 0 {
+		if err := h.db.UpdateChunkEmbedding(sub.ChunkID, sub.Embedding); err != nil {
+			http.Error(w, `{"error":"update chunk failed"}`, http.StatusInternalServerError)
+			return
+		}
+	} else if sub.PageID != 0 {
+		if err := h.db.UpdateEmbedding(sub.PageID, sub.Embedding); err != nil {
+			http.Error(w, `{"error":"update page failed"}`, http.StatusInternalServerError)
+			return
+		}
+	} else {
+		http.Error(w, `{"error":"chunk_id or page_id is required"}`, http.StatusBadRequest)
 		return
 	}
 

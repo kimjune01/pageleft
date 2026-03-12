@@ -164,6 +164,28 @@ func (c *Crawler) crawlPage(pageURL string, depth int) error {
 		return fmt.Errorf("insert page: %w", err)
 	}
 
+	// Extract paragraphs and insert as chunks
+	paragraphs := ExtractParagraphs(doc)
+	if len(paragraphs) > 0 {
+		embeddings, embErr := c.embedder.EmbedBatch(paragraphs)
+		if embErr != nil {
+			log.Printf("  chunk embedding error (inserting without): %v", embErr)
+			embeddings = make([][]float64, len(paragraphs))
+		}
+		chunks := make([]platform.Chunk, len(paragraphs))
+		for i, text := range paragraphs {
+			chunks[i] = platform.Chunk{
+				PageID:    pageID,
+				Idx:       i,
+				Text:      text,
+				Embedding: embeddings[i],
+			}
+		}
+		if err := c.db.InsertChunks(pageID, chunks); err != nil {
+			log.Printf("  insert chunks error: %v", err)
+		}
+	}
+
 	// Extract and process links
 	links := extractLinks(doc, resp.Request.URL)
 	for _, link := range links {
@@ -276,7 +298,7 @@ func ExtractTitle(n *html.Node) string {
 
 var skipTags = map[string]bool{
 	"script": true, "style": true, "nav": true, "footer": true,
-	"header": true, "noscript": true, "svg": true,
+	"header": true, "noscript": true, "svg": true, "aside": true,
 }
 
 func ExtractText(n *html.Node) string {
@@ -300,6 +322,66 @@ func ExtractText(n *html.Node) string {
 	walk(n)
 	// Normalize whitespace
 	return strings.Join(strings.Fields(sb.String()), " ")
+}
+
+var blockTags = map[string]bool{
+	"p": true, "h1": true, "h2": true, "h3": true, "h4": true, "h5": true, "h6": true,
+	"li": true, "blockquote": true, "dd": true, "dt": true, "figcaption": true,
+}
+
+// ExtractParagraphs walks the HTML DOM and splits text on block elements.
+// Scopes to <article> or <main> when present to avoid sidebar/nav noise.
+// Returns up to 30 chunks, each at least 20 characters.
+func ExtractParagraphs(n *html.Node) []string {
+	// Narrow scope to article or main if present
+	root := findContentRoot(n)
+
+	var paragraphs []string
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && skipTags[n.Data] {
+			return
+		}
+		if n.Type == html.ElementNode && blockTags[n.Data] {
+			text := strings.TrimSpace(textContent(n))
+			if len(text) >= 20 {
+				paragraphs = append(paragraphs, text)
+			}
+			return // don't recurse into children, textContent already got them
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(root)
+	if len(paragraphs) > 30 {
+		paragraphs = paragraphs[:30]
+	}
+	return paragraphs
+}
+
+// findContentRoot returns the first <article> or <main> element if one exists,
+// otherwise returns the original node for full-body fallback.
+func findContentRoot(n *html.Node) *html.Node {
+	var found *html.Node
+	var search func(*html.Node)
+	search = func(n *html.Node) {
+		if found != nil {
+			return
+		}
+		if n.Type == html.ElementNode && (n.Data == "article" || n.Data == "main") {
+			found = n
+			return
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			search(c)
+		}
+	}
+	search(n)
+	if found != nil {
+		return found
+	}
+	return n
 }
 
 func textContent(n *html.Node) string {

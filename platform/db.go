@@ -33,6 +33,22 @@ type Link struct {
 	AnchorText string
 }
 
+type Chunk struct {
+	ID        int64
+	PageID    int64
+	Idx       int
+	Text      string
+	Embedding []float64
+}
+
+type ChunkWithPage struct {
+	Chunk
+	PageURL     string
+	PageTitle   string
+	PageRank    float64
+	LicenseType string
+}
+
 type FrontierEntry struct {
 	ID           int64
 	URL          string
@@ -60,6 +76,9 @@ func (db *DB) Close() error {
 }
 
 func (db *DB) migrate() error {
+	if _, err := db.conn.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		return fmt.Errorf("enable foreign keys: %w", err)
+	}
 	_, err := db.conn.Exec(`
 		CREATE TABLE IF NOT EXISTS pages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,8 +105,17 @@ func (db *DB) migrate() error {
 			depth INTEGER NOT NULL DEFAULT 0,
 			discovered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
+		CREATE TABLE IF NOT EXISTS chunks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			page_id INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+			idx INTEGER NOT NULL,
+			text TEXT NOT NULL DEFAULT '',
+			embedding JSON,
+			UNIQUE(page_id, idx)
+		);
 		CREATE INDEX IF NOT EXISTS idx_pages_url ON pages(url);
 		CREATE INDEX IF NOT EXISTS idx_frontier_depth ON frontier(depth);
+		CREATE INDEX IF NOT EXISTS idx_chunks_page_id ON chunks(page_id);
 	`)
 	return err
 }
@@ -305,6 +333,115 @@ func (db *DB) InsertPageWithLinks(p *Page, links []string) (int64, error) {
 	}
 
 	return pageID, nil
+}
+
+// --- Chunks ---
+
+func (db *DB) InsertChunks(pageID int64, chunks []Chunk) error {
+	for _, c := range chunks {
+		var embJSON *string
+		if len(c.Embedding) > 0 {
+			b, err := json.Marshal(c.Embedding)
+			if err != nil {
+				return fmt.Errorf("marshal chunk embedding: %w", err)
+			}
+			s := string(b)
+			embJSON = &s
+		}
+		_, err := db.conn.Exec(`
+			INSERT INTO chunks (page_id, idx, text, embedding)
+			VALUES (?, ?, ?, ?)
+			ON CONFLICT(page_id, idx) DO UPDATE SET text=excluded.text, embedding=excluded.embedding`,
+			pageID, c.Idx, c.Text, embJSON)
+		if err != nil {
+			return fmt.Errorf("insert chunk: %w", err)
+		}
+	}
+	return nil
+}
+
+func (db *DB) AllChunksWithPages() ([]ChunkWithPage, error) {
+	rows, err := db.conn.Query(`
+		SELECT c.id, c.page_id, c.idx, c.text, c.embedding,
+		       p.url, p.title, p.pagerank, p.license_type
+		FROM chunks c
+		JOIN pages p ON p.id = c.page_id
+		WHERE c.embedding IS NOT NULL AND c.embedding != '[]' AND c.embedding != 'null'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ChunkWithPage
+	for rows.Next() {
+		var cw ChunkWithPage
+		var embJSON sql.NullString
+		if err := rows.Scan(&cw.ID, &cw.PageID, &cw.Idx, &cw.Text, &embJSON,
+			&cw.PageURL, &cw.PageTitle, &cw.PageRank, &cw.LicenseType); err != nil {
+			return nil, err
+		}
+		if embJSON.Valid && embJSON.String != "" {
+			json.Unmarshal([]byte(embJSON.String), &cw.Embedding)
+		}
+		out = append(out, cw)
+	}
+	return out, nil
+}
+
+func (db *DB) ChunksWithoutEmbeddings(limit int) ([]ChunkWithPage, error) {
+	rows, err := db.conn.Query(`
+		SELECT c.id, c.page_id, c.idx, c.text, p.url, p.title, p.pagerank, p.license_type
+		FROM chunks c
+		JOIN pages p ON p.id = c.page_id
+		WHERE c.embedding IS NULL OR c.embedding = '[]' OR c.embedding = 'null'
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ChunkWithPage
+	for rows.Next() {
+		var cw ChunkWithPage
+		if err := rows.Scan(&cw.ID, &cw.PageID, &cw.Idx, &cw.Text,
+			&cw.PageURL, &cw.PageTitle, &cw.PageRank, &cw.LicenseType); err != nil {
+			return nil, err
+		}
+		out = append(out, cw)
+	}
+	return out, nil
+}
+
+func (db *DB) UpdateChunkEmbedding(chunkID int64, emb []float64) error {
+	embJSON, err := json.Marshal(emb)
+	if err != nil {
+		return err
+	}
+	_, err = db.conn.Exec("UPDATE chunks SET embedding = ? WHERE id = ?", string(embJSON), chunkID)
+	return err
+}
+
+func (db *DB) PagesWithoutChunks(limit int) ([]*Page, error) {
+	rows, err := db.conn.Query(`
+		SELECT p.id, p.url, p.title, p.text_content, p.license_url, p.license_type, p.pagerank, p.crawled_at, p.content_hash
+		FROM pages p
+		LEFT JOIN chunks c ON c.page_id = p.id
+		WHERE c.id IS NULL
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var pages []*Page
+	for rows.Next() {
+		p := &Page{}
+		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseURL, &p.LicenseType, &p.PageRank, &p.CrawledAt, &p.ContentHash); err != nil {
+			return nil, err
+		}
+		pages = append(pages, p)
+	}
+	return pages, nil
 }
 
 func (db *DB) IsURLKnown(url string) (bool, error) {

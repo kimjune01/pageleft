@@ -3,10 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+	"time"
+
+	"golang.org/x/net/html"
 
 	"github.com/kimjune01/pageleft/crawler"
 	"github.com/kimjune01/pageleft/handler"
@@ -16,7 +20,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: pageleft <crawl|reindex|serve>\n")
+		fmt.Fprintf(os.Stderr, "usage: pageleft <crawl|reindex|serve|chunk-backfill>\n")
 		os.Exit(1)
 	}
 
@@ -29,6 +33,8 @@ func main() {
 		cmdReindex(dbPath)
 	case "serve":
 		cmdServe(dbPath)
+	case "chunk-backfill":
+		cmdChunkBackfill(dbPath)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
@@ -97,6 +103,85 @@ func cmdServe(dbPath string) {
 	if err := http.ListenAndServe(addr, h.Mux()); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func cmdChunkBackfill(dbPath string) {
+	fs := flag.NewFlagSet("chunk-backfill", flag.ExitOnError)
+	batchSize := fs.Int("batch", 50, "pages per batch")
+	fs.Parse(os.Args[2:])
+
+	db, err := platform.NewDB(dbPath)
+	if err != nil {
+		log.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	total := 0
+
+	for {
+		pages, err := db.PagesWithoutChunks(*batchSize)
+		if err != nil {
+			log.Fatalf("query pages: %v", err)
+		}
+		if len(pages) == 0 {
+			break
+		}
+
+		for _, p := range pages {
+			req, err := http.NewRequest("GET", p.URL, nil)
+			if err != nil {
+				log.Printf("skip %s: %v", p.URL, err)
+				continue
+			}
+			req.Header.Set("User-Agent", crawler.RobotsUserAgent)
+
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Printf("fetch %s: %v", p.URL, err)
+				continue
+			}
+
+			bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
+			resp.Body.Close()
+			if err != nil || resp.StatusCode != http.StatusOK {
+				log.Printf("skip %s: status %d", p.URL, resp.StatusCode)
+				continue
+			}
+
+			doc, err := html.Parse(strings.NewReader(string(bodyBytes)))
+			if err != nil {
+				log.Printf("parse %s: %v", p.URL, err)
+				continue
+			}
+
+			paragraphs := crawler.ExtractParagraphs(doc)
+			if len(paragraphs) == 0 {
+				log.Printf("no paragraphs: %s", p.URL)
+				continue
+			}
+
+			chunks := make([]platform.Chunk, len(paragraphs))
+			for i, text := range paragraphs {
+				chunks[i] = platform.Chunk{
+					PageID: p.ID,
+					Idx:    i,
+					Text:   text,
+					// Embedding left nil — federated work queue will handle it
+				}
+			}
+			if err := db.InsertChunks(p.ID, chunks); err != nil {
+				log.Printf("insert chunks %s: %v", p.URL, err)
+				continue
+			}
+
+			total++
+			log.Printf("[%d] backfilled %d chunks for %s", total, len(paragraphs), p.URL)
+			time.Sleep(1 * time.Second) // polite rate limiting
+		}
+	}
+
+	log.Printf("chunk-backfill complete: %d pages processed", total)
 }
 
 func envOr(key, fallback string) string {

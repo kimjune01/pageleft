@@ -62,15 +62,23 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get all pages
-	pages, err := h.db.AllPages()
-	if err != nil {
-		http.Error(w, `{"error":"database error"}`, http.StatusInternalServerError)
-		return
+	// Try chunk-level search first, fall back to page-level
+	var results []search.Result
+
+	chunks, chunkErr := h.db.AllChunksWithPages()
+	if chunkErr == nil && len(chunks) > 0 {
+		pageCount, _ := h.db.PageCount()
+		results = search.SearchChunks(chunks, queryEmb, pageCount, limit)
 	}
 
-	// Search
-	results := search.Search(pages, queryEmb, limit)
+	if len(results) == 0 {
+		pages, err := h.db.AllPages()
+		if err != nil {
+			http.Error(w, `{"error":"database error"}`, http.StatusInternalServerError)
+			return
+		}
+		results = search.Search(pages, queryEmb, limit)
+	}
 
 	// Build response
 	resp := searchResponse{
@@ -78,9 +86,12 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Total: len(results),
 	}
 	for _, r := range results {
-		snippet := r.Page.TextContent
-		if len(snippet) > 200 {
-			snippet = snippet[:200] + "..."
+		snippet := r.Snippet
+		if snippet == "" {
+			snippet = r.Page.TextContent
+			if len(snippet) > 200 {
+				snippet = snippet[:200] + "..."
+			}
 		}
 		resp.Results = append(resp.Results, searchResult{
 			URL:           r.Page.URL,
@@ -175,11 +186,35 @@ func (h *Handler) indexURL(pageURL string) {
 		CrawledAt:   time.Now(),
 		ContentHash: contentHash,
 	}
-	if _, err := h.db.InsertPage(page); err != nil {
+	pageID, err := h.db.InsertPage(page)
+	if err != nil {
 		log.Printf("crawl-on-demand insert %s: %v", pageURL, err)
 		return
 	}
-	log.Printf("crawl-on-demand indexed %s (%s)", finalURL, license.Type)
+
+	// Extract paragraphs and insert as chunks
+	paragraphs := crawler.ExtractParagraphs(doc)
+	if len(paragraphs) > 0 {
+		embeddings, embErr := h.embedder.EmbedBatch(paragraphs)
+		if embErr != nil {
+			log.Printf("crawl-on-demand chunk embed %s: %v", pageURL, embErr)
+			embeddings = make([][]float64, len(paragraphs))
+		}
+		chunks := make([]platform.Chunk, len(paragraphs))
+		for i, text := range paragraphs {
+			chunks[i] = platform.Chunk{
+				PageID:    pageID,
+				Idx:       i,
+				Text:      text,
+				Embedding: embeddings[i],
+			}
+		}
+		if err := h.db.InsertChunks(pageID, chunks); err != nil {
+			log.Printf("crawl-on-demand insert chunks %s: %v", pageURL, err)
+		}
+	}
+
+	log.Printf("crawl-on-demand indexed %s (%s, %d chunks)", finalURL, license.Type, len(paragraphs))
 }
 
 func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
