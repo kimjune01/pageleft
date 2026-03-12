@@ -6,7 +6,7 @@ Semantic search over copyleft-licensed web pages.
 
 ## Contributing
 
-Code PRs are not welcome. If you want to contribute, write a blog post about it under a copyleft license and PageLeft will find it.
+Code PRs are not welcome. If you want to contribute, write a blog post about it under a copyleft license and PageLeft will find it. An agent can check contributions against the manifesto for alignment.
 
 ## Reference implementations
 
