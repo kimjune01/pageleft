@@ -12,9 +12,9 @@ Semantic search over copyleft-licensed web pages.
 GET /api/search?q=<query>&limit=20
 ```
 
-Returns pages ranked by a combination of `semantic_score` (cosine similarity of embeddings) and `rank_score` (PageRank).
+Each page is split into paragraph-level chunks and each chunk is embedded separately, so queries match the specific paragraph that's relevant. Results are ranked by `semantic_score` (cosine similarity of the best-matching chunk) boosted by `rank_score` (PageRank). Snippets come from the matching paragraph, not a generic page summary.
 
-If `q` is a URL (starts with `http://` or `https://`), PageLeft will fetch the page, verify it has a copyleft license, index it, and include it in results — all in one request. Pages without a copyleft license are rejected silently.
+If `q` is a URL (starts with `http://` or `https://`), PageLeft will fetch the page, verify it has a copyleft license, extract paragraphs, embed them, and include the page in results — all in one request. Pages without a copyleft license are rejected silently.
 
 ### Federated workers
 
@@ -22,8 +22,8 @@ Workers donate crawl and embedding compute. The flow:
 
 1. `GET /api/frontier?limit=10` — claim URLs to crawl
 2. `POST /api/contribute/page` — submit crawled page (license is re-verified server-side)
-3. `GET /api/work/embed?limit=10` — claim pages that need embeddings
-4. `POST /api/contribute/embedding` — submit computed embedding
+3. `GET /api/work/embed?limit=10` — claim chunks that need embeddings (returns `chunk_id`, `page_id`, `text`)
+4. `POST /api/contribute/embedding` — submit computed embedding (with `chunk_id` or `page_id` for backward compat)
 
 ## Contributing
 
