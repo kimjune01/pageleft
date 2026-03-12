@@ -4,9 +4,32 @@ Semantic search over copyleft-licensed web pages.
 
 [pageleft.cc](https://pageleft.cc) | [Blog post](https://kimjune01.github.io/pageleft/)
 
+## API
+
+### Search
+
+```
+GET /api/search?q=<query>&limit=20
+```
+
+Returns pages ranked by a combination of `semantic_score` (cosine similarity of embeddings) and `rank_score` (PageRank).
+
+If `q` is a URL (starts with `http://` or `https://`), PageLeft will fetch the page, verify it has a copyleft license, index it, and include it in results — all in one request. Pages without a copyleft license are rejected silently.
+
+### Federated workers
+
+Workers donate crawl and embedding compute. The flow:
+
+1. `GET /api/frontier?limit=10` — claim URLs to crawl
+2. `POST /api/contribute/page` — submit crawled page (license is re-verified server-side)
+3. `GET /api/work/embed?limit=10` — claim pages that need embeddings
+4. `POST /api/contribute/embedding` — submit computed embedding
+
 ## Contributing
 
-Code PRs are not welcome. If you want to contribute, write a blog post about it under a copyleft license and PageLeft will find it. An agent will check contributions against the manifesto for alignment.
+- **Content**: Write a blog post under a copyleft license. An agent will find it, verify the license, and index it.
+- **Code**: PRs are not welcome. Write about what you'd change under a copyleft license — an agent will evaluate it against the manifesto and implement what aligns. See [vibelogging](https://june.kim/vibelogging).
+- **Compute**: Run a federated worker to donate crawl and embedding cycles.
 
 ## Reference implementations
 

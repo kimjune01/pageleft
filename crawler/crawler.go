@@ -123,12 +123,12 @@ func (c *Crawler) crawlPage(pageURL string, depth int) error {
 	log.Printf("  license: %s (%s)", license.Type, license.URL)
 
 	// Extract title and text
-	title := extractTitle(doc)
-	text := extractText(doc)
+	title := ExtractTitle(doc)
+	text := ExtractText(doc)
 	contentHash := fmt.Sprintf("%x", sha256.Sum256(bodyBytes))
 
 	// Generate embedding from title + first 500 words
-	embInput := title + " " + first500Words(text)
+	embInput := title + " " + First500Words(text)
 	emb, err := c.embedder.Embed(embInput)
 	if err != nil {
 		log.Printf("  embedding error (continuing without): %v", err)
@@ -249,12 +249,12 @@ func normalizeURL(rawURL string) string {
 	return u.String()
 }
 
-func extractTitle(n *html.Node) string {
+func ExtractTitle(n *html.Node) string {
 	if n.Type == html.ElementNode && n.Data == "title" {
 		return strings.TrimSpace(textContent(n))
 	}
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		if t := extractTitle(c); t != "" {
+		if t := ExtractTitle(c); t != "" {
 			return t
 		}
 	}
@@ -266,7 +266,7 @@ var skipTags = map[string]bool{
 	"header": true, "noscript": true, "svg": true,
 }
 
-func extractText(n *html.Node) string {
+func ExtractText(n *html.Node) string {
 	var sb strings.Builder
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
@@ -304,7 +304,7 @@ func textContent(n *html.Node) string {
 	return strings.TrimSpace(sb.String())
 }
 
-func first500Words(text string) string {
+func First500Words(text string) string {
 	words := strings.Fields(text)
 	if len(words) > 500 {
 		words = words[:500]

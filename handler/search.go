@@ -1,10 +1,20 @@
 package handler
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
+	"golang.org/x/net/html"
+
+	"github.com/kimjune01/pageleft/crawler"
+	"github.com/kimjune01/pageleft/platform"
 	"github.com/kimjune01/pageleft/search"
 )
 
@@ -28,6 +38,13 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if q == "" {
 		http.Error(w, `{"error":"missing q parameter"}`, http.StatusBadRequest)
 		return
+	}
+
+	// Crawl-on-demand: if query is a URL, index it before searching
+	if strings.HasPrefix(q, "http://") || strings.HasPrefix(q, "https://") {
+		if existing, _ := h.db.GetPageByURL(q); existing == nil {
+			h.indexURL(q)
+		}
 	}
 
 	limitStr := r.URL.Query().Get("limit")
@@ -82,6 +99,75 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 type statsResponse struct {
 	Pages int `json:"pages"`
 	Links int `json:"links"`
+}
+
+// indexURL fetches a URL, checks for a copyleft license, extracts content,
+// generates an embedding, and stores the page in the database.
+func (h *Handler) indexURL(pageURL string) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(pageURL)
+	if err != nil {
+		log.Printf("crawl-on-demand fetch %s: %v", pageURL, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("crawl-on-demand %s: status %d", pageURL, resp.StatusCode)
+		return
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if !strings.Contains(contentType, "text/html") {
+		log.Printf("crawl-on-demand %s: not HTML (%s)", pageURL, contentType)
+		return
+	}
+
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
+	if err != nil {
+		log.Printf("crawl-on-demand read %s: %v", pageURL, err)
+		return
+	}
+
+	doc, err := html.Parse(strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		log.Printf("crawl-on-demand parse %s: %v", pageURL, err)
+		return
+	}
+
+	license := crawler.DetectLicense(doc)
+	if license == nil {
+		log.Printf("crawl-on-demand %s: no copyleft license", pageURL)
+		return
+	}
+
+	title := crawler.ExtractTitle(doc)
+	text := crawler.ExtractText(doc)
+	contentHash := fmt.Sprintf("%x", sha256.Sum256(bodyBytes))
+
+	embInput := title + " " + crawler.First500Words(text)
+	emb, err := h.embedder.Embed(embInput)
+	if err != nil {
+		log.Printf("crawl-on-demand embed %s: %v", pageURL, err)
+		emb = nil
+	}
+
+	finalURL := resp.Request.URL.String()
+	page := &platform.Page{
+		URL:         finalURL,
+		Title:       title,
+		TextContent: text,
+		LicenseURL:  license.URL,
+		LicenseType: license.Type,
+		Embedding:   emb,
+		CrawledAt:   time.Now(),
+		ContentHash: contentHash,
+	}
+	if _, err := h.db.InsertPage(page); err != nil {
+		log.Printf("crawl-on-demand insert %s: %v", pageURL, err)
+		return
+	}
+	log.Printf("crawl-on-demand indexed %s (%s)", finalURL, license.Type)
 }
 
 func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
