@@ -108,8 +108,10 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 type statsResponse struct {
-	Pages int `json:"pages"`
-	Links int `json:"links"`
+	Pages          int    `json:"pages"`
+	Links          int    `json:"links"`
+	EmbeddingModel string `json:"embedding_model"`
+	EmbeddingDim   int    `json:"embedding_dim"`
 }
 
 // indexURL fetches a URL, checks for a copyleft license, extracts content,
@@ -222,6 +224,11 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 	links, _ := h.db.LinkCount()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(statsResponse{Pages: pages, Links: links})
+	json.NewEncoder(w).Encode(statsResponse{
+		Pages:          pages,
+		Links:          links,
+		EmbeddingModel: platform.EmbeddingModel,
+		EmbeddingDim:   platform.EmbeddingDim,
+	})
 }
 

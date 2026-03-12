@@ -11,7 +11,11 @@ import (
 	"time"
 )
 
-const hfEndpoint = "https://router.huggingface.co/hf-inference/models/BAAI/bge-small-en-v1.5/pipeline/feature-extraction"
+const (
+	EmbeddingModel = "BAAI/bge-small-en-v1.5"
+	EmbeddingDim   = 384
+	hfEndpoint     = "https://router.huggingface.co/hf-inference/models/" + EmbeddingModel + "/pipeline/feature-extraction"
+)
 
 type Embedder struct {
 	httpClient *http.Client

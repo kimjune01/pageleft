@@ -118,6 +118,12 @@ func (h *Handler) handleWorkEmbed(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	type workResponse struct {
+		Model string `json:"model"`
+		Dim   int    `json:"dim"`
+		Items any    `json:"items"`
+	}
+
 	// Prefer chunk work items
 	chunks, err := h.db.ChunksWithoutEmbeddings(limit)
 	if err == nil && len(chunks) > 0 {
@@ -126,16 +132,20 @@ func (h *Handler) handleWorkEmbed(w http.ResponseWriter, r *http.Request) {
 			PageID  int64  `json:"page_id"`
 			Text    string `json:"text"`
 		}
-		out := make([]chunkWork, len(chunks))
+		items := make([]chunkWork, len(chunks))
 		for i, c := range chunks {
-			out[i] = chunkWork{
+			items[i] = chunkWork{
 				ChunkID: c.ID,
 				PageID:  c.PageID,
 				Text:    c.Text,
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(out)
+		json.NewEncoder(w).Encode(workResponse{
+			Model: platform.EmbeddingModel,
+			Dim:   platform.EmbeddingDim,
+			Items: items,
+		})
 		return
 	}
 
@@ -151,14 +161,14 @@ func (h *Handler) handleWorkEmbed(w http.ResponseWriter, r *http.Request) {
 		Title       string `json:"title"`
 		TextContent string `json:"text_content"`
 	}
-	out := make([]embedWork, len(pages))
+	items := make([]embedWork, len(pages))
 	for i, p := range pages {
 		text := p.TextContent
 		words := strings.Fields(text)
 		if len(words) > 500 {
 			text = strings.Join(words[:500], " ")
 		}
-		out[i] = embedWork{
+		items[i] = embedWork{
 			PageID:      p.ID,
 			Title:       p.Title,
 			TextContent: text,
@@ -166,7 +176,11 @@ func (h *Handler) handleWorkEmbed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(out)
+	json.NewEncoder(w).Encode(workResponse{
+		Model: platform.EmbeddingModel,
+		Dim:   platform.EmbeddingDim,
+		Items: items,
+	})
 }
 
 // embeddingSubmission is the JSON body for POST /api/contribute/embedding.
@@ -194,6 +208,11 @@ func (h *Handler) handleContributeEmbedding(w http.ResponseWriter, r *http.Reque
 
 	if len(sub.Embedding) == 0 {
 		http.Error(w, `{"error":"embedding is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	if len(sub.Embedding) != platform.EmbeddingDim {
+		http.Error(w, fmt.Sprintf(`{"error":"embedding must be %d dimensions (got %d), use model %s"}`, platform.EmbeddingDim, len(sub.Embedding), platform.EmbeddingModel), http.StatusBadRequest)
 		return
 	}
 
