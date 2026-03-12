@@ -177,9 +177,9 @@ echo "User data script complete!"
 			return err
 		}
 
-		// --- Route53 Hosted Zone ---
-		zone, err := route53.NewZone(ctx, "pageleft-zone", &route53.ZoneArgs{
-			Name: pulumi.String(domain),
+		// --- Route53 Hosted Zone (reuse existing to keep NS records stable) ---
+		zone, err := route53.LookupZone(ctx, &route53.LookupZoneArgs{
+			Name: pulumi.StringRef(domain),
 		})
 		if err != nil {
 			return err
@@ -187,7 +187,7 @@ echo "User data script complete!"
 
 		// --- DNS Records ---
 		_, err = route53.NewRecord(ctx, "pageleft-a", &route53.RecordArgs{
-			ZoneId:  zone.ZoneId,
+			ZoneId:  pulumi.String(zone.ZoneId),
 			Name:    pulumi.String(domain),
 			Type:    pulumi.String("A"),
 			Ttl:     pulumi.Int(300),
@@ -198,7 +198,7 @@ echo "User data script complete!"
 		}
 
 		_, err = route53.NewRecord(ctx, "pageleft-www", &route53.RecordArgs{
-			ZoneId:  zone.ZoneId,
+			ZoneId:  pulumi.String(zone.ZoneId),
 			Name:    pulumi.String("www." + domain),
 			Type:    pulumi.String("A"),
 			Ttl:     pulumi.Int(300),
@@ -210,7 +210,7 @@ echo "User data script complete!"
 
 		// --- Outputs ---
 		ctx.Export("publicIp", eip.PublicIp)
-		ctx.Export("nameservers", zone.NameServers)
+		ctx.Export("nameservers", pulumi.ToStringArray(zone.NameServers))
 		ctx.Export("sshCommand", pulumi.Sprintf("ssh ubuntu@%s", eip.PublicIp))
 		ctx.Export("siteUrl", pulumi.String("https://"+domain))
 
