@@ -2,7 +2,7 @@
 
 Semantic search over copyleft-licensed web pages.
 
-[pageleft.cc](https://pageleft.cc) | [Blog post](https://kimjune01.github.io/pageleft/)
+[pageleft.cc](https://pageleft.cc) | [Manifesto](https://www.june.kim/pageleft-manifesto)
 
 ## API
 

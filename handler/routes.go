@@ -38,7 +38,7 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Write([]byte(`PageLeft — a search engine for copyleft ideas.
 
-Read more: https://www.june.kim/pageleft
+Read more: https://www.june.kim/pageleft-manifesto
 Source:    https://github.com/kimjune01/pageleft
 
 API
