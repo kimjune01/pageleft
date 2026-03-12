@@ -2,17 +2,24 @@ package handler
 
 import (
 	"net/http"
+	"time"
 
+	"github.com/kimjune01/pageleft/crawler"
 	"github.com/kimjune01/pageleft/platform"
 )
 
 type Handler struct {
 	db       *platform.DB
 	embedder *platform.Embedder
+	robots   *crawler.RobotsChecker
 }
 
 func New(db *platform.DB, embedder *platform.Embedder) *Handler {
-	return &Handler{db: db, embedder: embedder}
+	return &Handler{
+		db:       db,
+		embedder: embedder,
+		robots:   crawler.NewRobotsChecker(&http.Client{Timeout: 10 * time.Second}),
+	}
 }
 
 func (h *Handler) Mux() http.Handler {

@@ -104,8 +104,20 @@ type statsResponse struct {
 // indexURL fetches a URL, checks for a copyleft license, extracts content,
 // generates an embedding, and stores the page in the database.
 func (h *Handler) indexURL(pageURL string) {
+	if !h.robots.IsAllowed(pageURL) {
+		log.Printf("crawl-on-demand %s: blocked by robots.txt", pageURL)
+		return
+	}
+
+	req, err := http.NewRequest("GET", pageURL, nil)
+	if err != nil {
+		log.Printf("crawl-on-demand %s: %v", pageURL, err)
+		return
+	}
+	req.Header.Set("User-Agent", crawler.RobotsUserAgent)
+
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(pageURL)
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("crawl-on-demand fetch %s: %v", pageURL, err)
 		return

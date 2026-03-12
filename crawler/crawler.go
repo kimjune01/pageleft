@@ -20,6 +20,7 @@ type Crawler struct {
 	db       *platform.DB
 	embedder *platform.Embedder
 	client   *http.Client
+	robots   *RobotsChecker
 
 	rateLimit time.Duration
 	maxPages  int
@@ -30,12 +31,14 @@ type Crawler struct {
 }
 
 func New(db *platform.DB, embedder *platform.Embedder, maxPages int) *Crawler {
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
 	return &Crawler{
-		db:       db,
-		embedder: embedder,
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		db:        db,
+		embedder:  embedder,
+		client:    client,
+		robots:    NewRobotsChecker(client),
 		rateLimit: 2 * time.Second,
 		maxPages:  maxPages,
 		lastFetch: make(map[string]time.Time),
@@ -83,9 +86,19 @@ func (c *Crawler) Crawl(seeds []string) error {
 }
 
 func (c *Crawler) crawlPage(pageURL string, depth int) error {
+	if !c.robots.IsAllowed(pageURL) {
+		return fmt.Errorf("blocked by robots.txt")
+	}
+
 	c.rateLimitHost(pageURL)
 
-	resp, err := c.client.Get(pageURL)
+	req, err := http.NewRequest("GET", pageURL, nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("User-Agent", RobotsUserAgent)
+
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("fetch: %w", err)
 	}
