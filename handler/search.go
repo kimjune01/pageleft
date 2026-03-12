@@ -109,6 +109,7 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 type statsResponse struct {
 	Pages          int    `json:"pages"`
+	Chunks         int    `json:"chunks"`
 	Links          int    `json:"links"`
 	EmbeddingModel string `json:"embedding_model"`
 	EmbeddingDim   int    `json:"embedding_dim"`
@@ -221,11 +222,13 @@ func (h *Handler) indexURL(pageURL string) {
 
 func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 	pages, _ := h.db.PageCount()
+	chunks, _ := h.db.ChunkCount()
 	links, _ := h.db.LinkCount()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(statsResponse{
 		Pages:          pages,
+		Chunks:         chunks,
 		Links:          links,
 		EmbeddingModel: platform.EmbeddingModel,
 		EmbeddingDim:   platform.EmbeddingDim,

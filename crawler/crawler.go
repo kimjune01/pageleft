@@ -302,6 +302,7 @@ var skipTags = map[string]bool{
 }
 
 func ExtractText(n *html.Node) string {
+	root := findContentRoot(n)
 	var sb strings.Builder
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
@@ -319,7 +320,7 @@ func ExtractText(n *html.Node) string {
 			walk(c)
 		}
 	}
-	walk(n)
+	walk(root)
 	// Normalize whitespace
 	return strings.Join(strings.Fields(sb.String()), " ")
 }

@@ -444,6 +444,12 @@ func (db *DB) PagesWithoutChunks(limit int) ([]*Page, error) {
 	return pages, nil
 }
 
+func (db *DB) ChunkCount() (int, error) {
+	var n int
+	err := db.conn.QueryRow("SELECT COUNT(*) FROM chunks").Scan(&n)
+	return n, err
+}
+
 func (db *DB) IsURLKnown(url string) (bool, error) {
 	var n int
 	err := db.conn.QueryRow("SELECT COUNT(*) FROM pages WHERE url = ? UNION ALL SELECT COUNT(*) FROM frontier WHERE url = ?", url, url).Scan(&n)
