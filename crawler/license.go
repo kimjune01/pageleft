@@ -27,6 +27,7 @@ var copyleftPatterns = []struct {
 	{"opensource.org/licenses/GPL", "GPL"},
 	// GFDL
 	{"gnu.org/licenses/fdl", "GFDL"},
+	{"gnu.org/copyleft/fdl", "GFDL"},
 	// MPL
 	{"mozilla.org/MPL", "MPL"},
 	{"opensource.org/licenses/MPL", "MPL"},
