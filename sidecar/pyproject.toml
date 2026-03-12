@@ -1,0 +1,9 @@
+[project]
+name = "sidecar"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.135.1",
+    "sentence-transformers>=5.2.3",
+    "uvicorn>=0.41.0",
+]

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PageLeft</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    max-width: 720px; margin: 0 auto; padding: 2rem 1rem;
+    color: #1a1a1a; background: #fafaf8;
+  }
+  h1 { font-size: 1.8rem; margin-bottom: 0.25rem; }
+  .tagline { color: #666; margin-bottom: 1.5rem; font-size: 0.95rem; }
+  .search-box {
+    display: flex; gap: 0.5rem; margin-bottom: 1.5rem;
+  }
+  .search-box input {
+    flex: 1; padding: 0.6rem 0.8rem; font-size: 1rem;
+    border: 1px solid #ccc; border-radius: 6px;
+    outline: none;
+  }
+  .search-box input:focus { border-color: #4a7c59; }
+  .search-box button {
+    padding: 0.6rem 1.2rem; font-size: 1rem;
+    background: #4a7c59; color: white; border: none;
+    border-radius: 6px; cursor: pointer;
+  }
+  .search-box button:hover { background: #3d6b4a; }
+  .stats { color: #888; font-size: 0.85rem; margin-bottom: 1rem; }
+  .result { margin-bottom: 1.5rem; }
+  .result a {
+    font-size: 1.1rem; color: #1a5276; text-decoration: none;
+    font-weight: 500;
+  }
+  .result a:hover { text-decoration: underline; }
+  .result .url { color: #2d8659; font-size: 0.85rem; margin: 0.1rem 0; }
+  .result .snippet { color: #444; font-size: 0.9rem; line-height: 1.4; }
+  .result .meta {
+    color: #999; font-size: 0.8rem; margin-top: 0.2rem;
+  }
+  .meta .license {
+    background: #e8f5e9; color: #2e7d32; padding: 0.1rem 0.4rem;
+    border-radius: 3px; font-size: 0.75rem;
+  }
+  .empty { color: #999; text-align: center; padding: 3rem 0; }
+  #loading { display: none; color: #888; padding: 1rem 0; }
+</style>
+</head>
+<body>
+  <h1>PageLeft</h1>
+  <p class="tagline">Search the copyleft web.</p>
+
+  <div class="search-box">
+    <input type="text" id="q" placeholder="Search copyleft pages..." autofocus>
+    <button onclick="doSearch()">Search</button>
+  </div>
+
+  <div id="stats" class="stats"></div>
+  <div id="loading">Searching...</div>
+  <div id="results"></div>
+
+<script>
+  const q = document.getElementById('q');
+  const results = document.getElementById('results');
+  const loading = document.getElementById('loading');
+  const statsEl = document.getElementById('stats');
+
+  q.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+
+  async function doSearch() {
+    const query = q.value.trim();
+    if (!query) return;
+
+    results.innerHTML = '';
+    loading.style.display = 'block';
+
+    try {
+      const resp = await fetch('/api/search?q=' + encodeURIComponent(query) + '&limit=20');
+      const data = await resp.json();
+      loading.style.display = 'none';
+
+      if (!data.results || data.results.length === 0) {
+        results.innerHTML = '<div class="empty">No results found.</div>';
+        return;
+      }
+
+      statsEl.textContent = data.total + ' results';
+
+      results.innerHTML = data.results.map(r => `
+        <div class="result">
+          <a href="${esc(r.url)}" target="_blank">${esc(r.title || r.url)}</a>
+          <div class="url">${esc(r.url)}</div>
+          <div class="snippet">${esc(r.snippet)}</div>
+          <div class="meta">
+            <span class="license">${esc(r.license)}</span>
+            score ${r.score.toFixed(3)} &middot; sim ${r.similarity.toFixed(3)}
+          </div>
+        </div>
+      `).join('');
+    } catch (err) {
+      loading.style.display = 'none';
+      results.innerHTML = '<div class="empty">Search failed: ' + esc(err.message) + '</div>';
+    }
+  }
+
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s || '';
+    return d.innerHTML;
+  }
+
+  // Load stats on page load
+  fetch('/api/stats').then(r => r.json()).then(data => {
+    statsEl.textContent = data.pages + ' pages indexed, ' + data.links + ' links';
+  }).catch(() => {});
+</script>
+</body>
+</html>
