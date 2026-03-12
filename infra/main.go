@@ -1,9 +1,12 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/ec2"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/route53"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
+	"github.com/pulumi/pulumi/sdk/v3/go/pulumi/config"
 )
 
 const domain = "pageleft.cc"
@@ -62,8 +65,12 @@ func main() {
 			return err
 		}
 
+		// --- Config ---
+		cfg := config.New(ctx, "")
+		hfToken := cfg.Require("hfToken")
+
 		// --- User Data Script ---
-		userData := `#!/bin/bash
+		userData := fmt.Sprintf(`#!/bin/bash
 set -euxo pipefail
 exec > /var/log/user-data.log 2>&1
 
@@ -106,6 +113,7 @@ ExecStart=/usr/local/bin/pageleft serve --port 8080
 Restart=always
 RestartSec=5
 Environment=PAGELEFT_DB=/var/lib/pageleft/pageleft.db
+Environment=HF_TOKEN=%s
 
 [Install]
 WantedBy=multi-user.target
@@ -131,14 +139,16 @@ systemctl restart caddy
 # --- Initial crawl + reindex ---
 echo "Running initial crawl..."
 PAGELEFT_DB=/var/lib/pageleft/pageleft.db \
+HF_TOKEN=%s \
   /usr/local/bin/pageleft crawl --seeds "https://creativecommons.org,https://www.gnu.org,https://www.fsf.org" --max-pages 100 || true
 
 echo "Running reindex..."
 PAGELEFT_DB=/var/lib/pageleft/pageleft.db \
+HF_TOKEN=%s \
   /usr/local/bin/pageleft reindex || true
 
 echo "User data script complete!"
-`
+`, hfToken, hfToken, hfToken)
 
 		// --- EC2 Instance ---
 		instance, err := ec2.NewInstance(ctx, "pageleft-server", &ec2.InstanceArgs{

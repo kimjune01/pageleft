@@ -7,17 +7,20 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"os"
 	"time"
 )
 
-const hfEndpoint = "https://api-inference.huggingface.co/pipeline/feature-extraction/BAAI/bge-small-en-v1.5"
+const hfEndpoint = "https://router.huggingface.co/hf-inference/models/BAAI/bge-small-en-v1.5/pipeline/feature-extraction"
 
 type Embedder struct {
 	httpClient *http.Client
+	hfToken    string
 }
 
 func NewEmbedder() *Embedder {
 	return &Embedder{
+		hfToken: os.Getenv("HF_TOKEN"),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
@@ -38,7 +41,16 @@ func (e *Embedder) Embed(text string) ([]float64, error) {
 		return nil, fmt.Errorf("marshal embed request: %w", err)
 	}
 
-	resp, err := e.httpClient.Post(hfEndpoint, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest("POST", hfEndpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create HF request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if e.hfToken != "" {
+		req.Header.Set("Authorization", "Bearer "+e.hfToken)
+	}
+
+	resp, err := e.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HF API request failed: %w", err)
 	}
@@ -48,8 +60,8 @@ func (e *Embedder) Embed(text string) ([]float64, error) {
 		return nil, fmt.Errorf("HF API returned status %d", resp.StatusCode)
 	}
 
-	// HF returns [[0.1, -0.2, ...]] for single input
-	var result [][]float64
+	// HF router returns [0.1, -0.2, ...] for single input
+	var result []float64
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode HF response: %w", err)
 	}
@@ -58,7 +70,7 @@ func (e *Embedder) Embed(text string) ([]float64, error) {
 		return nil, fmt.Errorf("HF API returned empty result")
 	}
 
-	return l2Normalize(result[0]), nil
+	return l2Normalize(result), nil
 }
 
 func (e *Embedder) EmbedBatch(texts []string) ([][]float64, error) {
@@ -67,7 +79,16 @@ func (e *Embedder) EmbedBatch(texts []string) ([][]float64, error) {
 		return nil, fmt.Errorf("marshal embed request: %w", err)
 	}
 
-	resp, err := e.httpClient.Post(hfEndpoint, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest("POST", hfEndpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create HF request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if e.hfToken != "" {
+		req.Header.Set("Authorization", "Bearer "+e.hfToken)
+	}
+
+	resp, err := e.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HF API request failed: %w", err)
 	}

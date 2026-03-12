@@ -1,2 +1,4 @@
 config:
   aws:region: us-west-2
+  pageleft:hfToken:
+    secure: AAABAE3psRMYfrKFd+FlKvG6qneoYKtvVYUWES8OBUN9s7OFc4IKgyF32ZSf7BJbxsNEZHcEMbUYMLZWVTIpK/6Bnr+1
