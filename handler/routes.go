@@ -19,6 +19,9 @@ func (h *Handler) Mux() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/search", h.handleSearch)
 	mux.HandleFunc("GET /api/stats", h.handleStats)
-	mux.HandleFunc("GET /", h.handleIndex)
+	mux.HandleFunc("GET /api/frontier", h.handleFrontier)
+	mux.HandleFunc("POST /api/contribute/page", h.handleContributePage)
+	mux.HandleFunc("GET /api/work/embed", h.handleWorkEmbed)
+	mux.HandleFunc("POST /api/contribute/embedding", h.handleContributeEmbedding)
 	return mux
 }

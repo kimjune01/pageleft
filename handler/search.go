@@ -3,22 +3,18 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strconv"
 
 	"github.com/kimjune01/pageleft/search"
 )
 
 type searchResult struct {
-	URL        string  `json:"url"`
-	Title      string  `json:"title"`
-	Snippet    string  `json:"snippet"`
-	License    string  `json:"license"`
-	Similarity float64 `json:"similarity"`
-	PageRank   float64 `json:"pagerank"`
-	Score      float64 `json:"score"`
+	URL           string  `json:"url"`
+	Title         string  `json:"title"`
+	Snippet       string  `json:"snippet"`
+	License       string  `json:"license"`
+	SemanticScore float64 `json:"semantic_score"`
+	RankScore     float64 `json:"rank_score"`
 }
 
 type searchResponse struct {
@@ -70,13 +66,12 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 			snippet = snippet[:200] + "..."
 		}
 		resp.Results = append(resp.Results, searchResult{
-			URL:        r.Page.URL,
-			Title:      r.Page.Title,
-			Snippet:    snippet,
-			License:    r.Page.LicenseType,
-			Similarity: r.Similarity,
-			PageRank:   r.Page.PageRank,
-			Score:      r.FinalScore,
+			URL:           r.Page.URL,
+			Title:         r.Page.Title,
+			Snippet:       snippet,
+			License:       r.Page.LicenseType,
+			SemanticScore: r.Similarity,
+			RankScore:     r.Page.PageRank,
 		})
 	}
 
@@ -97,19 +92,3 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(statsResponse{Pages: pages, Links: links})
 }
 
-func (h *Handler) handleIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-	// Serve frontend/index.html relative to the binary's source
-	_, filename, _, _ := runtime.Caller(0)
-	frontendPath := filepath.Join(filepath.Dir(filepath.Dir(filename)), "frontend", "index.html")
-
-	// Fall back to working directory
-	if _, err := os.Stat(frontendPath); err != nil {
-		frontendPath = "frontend/index.html"
-	}
-
-	http.ServeFile(w, r, frontendPath)
-}

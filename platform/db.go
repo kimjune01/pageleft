@@ -251,6 +251,62 @@ func (db *DB) FrontierSize() (int, error) {
 	return n, err
 }
 
+// PeekFrontier returns frontier entries without removing them.
+func (db *DB) PeekFrontier(limit int) ([]*FrontierEntry, error) {
+	rows, err := db.conn.Query("SELECT id, url, depth, discovered_at FROM frontier ORDER BY depth ASC, id ASC LIMIT ?", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []*FrontierEntry
+	for rows.Next() {
+		e := &FrontierEntry{}
+		if err := rows.Scan(&e.ID, &e.URL, &e.Depth, &e.DiscoveredAt); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	return entries, nil
+}
+
+// PagesWithoutEmbeddings returns pages that have no embedding stored.
+func (db *DB) PagesWithoutEmbeddings(limit int) ([]*Page, error) {
+	rows, err := db.conn.Query("SELECT id, url, title, text_content, license_url, license_type, pagerank, crawled_at, content_hash FROM pages WHERE embedding IS NULL OR embedding = '[]' OR embedding = 'null' LIMIT ?", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var pages []*Page
+	for rows.Next() {
+		p := &Page{}
+		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseURL, &p.LicenseType, &p.PageRank, &p.CrawledAt, &p.ContentHash); err != nil {
+			return nil, err
+		}
+		pages = append(pages, p)
+	}
+	return pages, nil
+}
+
+// InsertPageWithLinks inserts a page and its outgoing links in one call.
+func (db *DB) InsertPageWithLinks(p *Page, links []string) (int64, error) {
+	pageID, err := db.InsertPage(p)
+	if err != nil {
+		return 0, err
+	}
+
+	for _, targetURL := range links {
+		target, _ := db.GetPageByURL(targetURL)
+		if target != nil {
+			db.InsertLink(pageID, target.ID, "")
+		}
+		db.AddToFrontier(targetURL, 0)
+	}
+
+	return pageID, nil
+}
+
 func (db *DB) IsURLKnown(url string) (bool, error) {
 	var n int
 	err := db.conn.QueryRow("SELECT COUNT(*) FROM pages WHERE url = ? UNION ALL SELECT COUNT(*) FROM frontier WHERE url = ?", url, url).Scan(&n)

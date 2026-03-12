@@ -21,22 +21,21 @@ func main() {
 	}
 
 	dbPath := envOr("PAGELEFT_DB", "pageleft.db")
-	sidecarURL := envOr("SIDECAR_URL", "http://localhost:8081")
 
 	switch os.Args[1] {
 	case "crawl":
-		cmdCrawl(dbPath, sidecarURL)
+		cmdCrawl(dbPath)
 	case "reindex":
 		cmdReindex(dbPath)
 	case "serve":
-		cmdServe(dbPath, sidecarURL)
+		cmdServe(dbPath)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
 	}
 }
 
-func cmdCrawl(dbPath, sidecarURL string) {
+func cmdCrawl(dbPath string) {
 	fs := flag.NewFlagSet("crawl", flag.ExitOnError)
 	seeds := fs.String("seeds", "", "comma-separated seed URLs")
 	maxPages := fs.Int("max-pages", 100, "maximum pages to crawl")
@@ -52,7 +51,7 @@ func cmdCrawl(dbPath, sidecarURL string) {
 	}
 	defer db.Close()
 
-	embedder := platform.NewEmbedder(sidecarURL)
+	embedder := platform.NewEmbedder()
 	c := crawler.New(db, embedder, *maxPages)
 
 	seedList := strings.Split(*seeds, ",")
@@ -79,7 +78,7 @@ func cmdReindex(dbPath string) {
 	log.Println("done")
 }
 
-func cmdServe(dbPath, sidecarURL string) {
+func cmdServe(dbPath string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	port := fs.String("port", "8080", "listen port")
 	fs.Parse(os.Args[2:])
@@ -90,7 +89,7 @@ func cmdServe(dbPath, sidecarURL string) {
 	}
 	defer db.Close()
 
-	embedder := platform.NewEmbedder(sidecarURL)
+	embedder := platform.NewEmbedder()
 	h := handler.New(db, embedder)
 
 	addr := ":" + *port
