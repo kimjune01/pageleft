@@ -530,20 +530,20 @@ type ContributorStat struct {
 	Count       int    `json:"count"`
 }
 
-// ContributorStats returns top 10 contributors, optionally filtered by type.
-func (db *DB) ContributorStats(ctype string) ([]ContributorStat, error) {
+// ContributorStats returns top contributors, optionally filtered by type.
+func (db *DB) ContributorStats(ctype string, limit int) ([]ContributorStat, error) {
 	var rows *sql.Rows
 	var err error
 	if ctype != "" {
 		rows, err = db.conn.Query(`
 			SELECT contributor, COUNT(*) as n
 			FROM contributions WHERE contributor != '' AND type = ?
-			GROUP BY contributor ORDER BY n DESC LIMIT 10`, ctype)
+			GROUP BY contributor ORDER BY n DESC LIMIT ?`, ctype, limit)
 	} else {
 		rows, err = db.conn.Query(`
 			SELECT contributor, COUNT(*) as n
 			FROM contributions WHERE contributor != ''
-			GROUP BY contributor ORDER BY n DESC LIMIT 10`)
+			GROUP BY contributor ORDER BY n DESC LIMIT ?`, limit)
 	}
 	if err != nil {
 		return nil, err

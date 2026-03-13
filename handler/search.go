@@ -254,7 +254,13 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 	ctype := r.URL.Query().Get("type")
-	contributors, _ := h.db.ContributorStats(ctype)
+	limit := 10
+	if s := r.URL.Query().Get("n"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+	contributors, _ := h.db.ContributorStats(ctype, limit)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(contributors)
 }
