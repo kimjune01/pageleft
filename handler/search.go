@@ -63,6 +63,8 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	_, compilableOnly := r.URL.Query()["compiles"]
+
 	// Try chunk-level search first, fall back to page-level
 	var results []search.Result
 
@@ -79,6 +81,16 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		results = search.Search(pages, queryEmb, limit)
+	}
+
+	if compilableOnly {
+		filtered := results[:0]
+		for _, r := range results {
+			if r.Page.Compilable {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
 	}
 
 	// Build response
