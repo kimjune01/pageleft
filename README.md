@@ -12,9 +12,11 @@ Semantic search over copyleft-licensed web pages.
 GET /api/search?q=<query>&limit=20&compiles
 ```
 
-Each page is split into paragraph-level chunks and each chunk is embedded separately, so queries match the specific paragraph that's relevant. Results are ranked by `semantic_score` (cosine similarity of the best-matching chunk) boosted by `rank_score` (PageRank) and `quality` (compounding review scores). Pages flagged as compilable get a 2x ranking boost. Add `&compiles` to return only pages with reference implementations. Snippets come from the matching paragraph, not a generic page summary.
-
-If `q` is a URL (starts with `http://` or `https://`), PageLeft will fetch the page, verify it has a copyleft license, extract paragraphs, embed them, and include the page in results — all in one request. Pages without a copyleft license are rejected silently.
+- Chunks: each page is split into paragraphs, embedded separately. Queries match the specific paragraph, not a page average.
+- Ranking: `semantic_score` (cosine sim) * `rank_score` (PageRank) * `quality` (compounding review scores). Compilable pages get 2x.
+- `&compiles`: filter to pages with reference implementations only.
+- `&limit=N`: cap results (default 20).
+- If `q` is a URL, PageLeft fetches, verifies copyleft license, embeds, and indexes in one request.
 
 ### Federated workers
 
