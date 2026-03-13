@@ -523,7 +523,7 @@ func (db *DB) ContributorStats() ([]ContributorStat, error) {
 	rows, err := db.conn.Query(`
 		SELECT contributor, COUNT(*) as reviews
 		FROM quality_reviews WHERE contributor != ''
-		GROUP BY contributor ORDER BY reviews DESC`)
+		GROUP BY contributor ORDER BY reviews DESC LIMIT 10`)
 	if err != nil {
 		return nil, err
 	}
