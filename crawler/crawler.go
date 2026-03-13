@@ -284,6 +284,23 @@ func normalizeURL(rawURL string) string {
 	return u.String()
 }
 
+// ExtractLinks returns normalized absolute URLs from <a> tags.
+func ExtractLinks(doc *html.Node, baseURL string) []string {
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return nil
+	}
+	raw := extractLinks(doc, base)
+	var out []string
+	for _, l := range raw {
+		n := normalizeURL(l.href)
+		if n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 func ExtractTitle(n *html.Node) string {
 	if n.Type == html.ElementNode && n.Data == "title" {
 		return strings.TrimSpace(textContent(n))

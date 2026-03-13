@@ -193,12 +193,54 @@ func cmdLinkBackfill(dbPath string) {
 	}
 	defer db.Close()
 
-	log.Println("backfilling links...")
-	count, err := db.BackfillLinks()
+	pages, err := db.AllPages()
 	if err != nil {
-		log.Fatalf("backfill links: %v", err)
+		log.Fatalf("load pages: %v", err)
 	}
-	log.Printf("inserted %d links", count)
+	urlMap, err := db.PageURLMap()
+	if err != nil {
+		log.Fatalf("load url map: %v", err)
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	linkCount := 0
+
+	for i, p := range pages {
+		req, err := http.NewRequest("GET", p.URL, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", crawler.RobotsUserAgent)
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != http.StatusOK {
+			continue
+		}
+		doc, err := html.Parse(strings.NewReader(string(bodyBytes)))
+		if err != nil {
+			continue
+		}
+
+		hrefs := crawler.ExtractLinks(doc, p.URL)
+		for _, href := range hrefs {
+			if targetID, ok := urlMap[href]; ok && targetID != p.ID {
+				if err := db.InsertLink(p.ID, targetID, ""); err == nil {
+					linkCount++
+				}
+			}
+		}
+
+		if (i+1)%50 == 0 {
+			log.Printf("processed %d/%d pages, %d links found", i+1, len(pages), linkCount)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	log.Printf("inserted %d links from %d pages", linkCount, len(pages))
 
 	log.Println("recomputing PageRank...")
 	if err := search.ComputePageRank(db); err != nil {

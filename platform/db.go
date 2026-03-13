@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -585,31 +584,23 @@ func (db *DB) QualityCoverage(minReviews int) (float64, error) {
 	return float64(reviewed) / float64(total), nil
 }
 
-// BackfillLinks scans all pages and inserts links where one page's text_content contains another page's URL.
-func (db *DB) BackfillLinks() (int, error) {
-	pages, err := db.AllPages()
+// PageURLMap returns a map of URL -> page ID for all pages.
+func (db *DB) PageURLMap() (map[string]int64, error) {
+	rows, err := db.conn.Query("SELECT id, url FROM pages")
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	urlToID := make(map[string]int64, len(pages))
-	for _, p := range pages {
-		urlToID[p.URL] = p.ID
-	}
-	count := 0
-	for _, from := range pages {
-		for targetURL, targetID := range urlToID {
-			if targetID == from.ID {
-				continue
-			}
-			if strings.Contains(from.TextContent, targetURL) {
-				err := db.InsertLink(from.ID, targetID, "")
-				if err == nil {
-					count++
-				}
-			}
+	defer rows.Close()
+	m := make(map[string]int64)
+	for rows.Next() {
+		var id int64
+		var u string
+		if err := rows.Scan(&id, &u); err != nil {
+			return nil, err
 		}
+		m[u] = id
 	}
-	return count, nil
+	return m, nil
 }
 
 // SetCompilable marks a page as having a compilable spec or reference implementation.
