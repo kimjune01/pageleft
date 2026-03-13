@@ -26,6 +26,7 @@ func New(db *platform.DB, embedder *platform.Embedder) *Handler {
 func (h *Handler) Mux() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", h.handleRoot)
+	mux.HandleFunc("GET /favicon.ico", h.handleFavicon)
 	mux.HandleFunc("GET /api/search", h.handleSearch)
 	mux.HandleFunc("GET /api/stats", h.handleStats)
 	mux.HandleFunc("GET /api/leaderboard", h.handleLeaderboard)
@@ -39,10 +40,16 @@ func (h *Handler) Mux() http.Handler {
 	return mux
 }
 
+func (h *Handler) handleFavicon(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	fmt.Fprint(w, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🍄</text></svg>`)
+}
+
 func (h *Handler) handleRoot(w http.ResponseWriter, r *http.Request) {
 	pages, _ := h.db.PageCount()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, `PageLeft — a search engine for copyleft expressions.
+	fmt.Fprintf(w, `🍄 PageLeft — a search engine for copyleft expressions.
 %d pages indexed.
 
 Read more: https://www.june.kim/pageleft-manifesto

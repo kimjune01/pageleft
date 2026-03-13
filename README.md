@@ -1,4 +1,4 @@
-# PageLeft
+# 🍄 PageLeft
 
 Semantic search over copyleft-licensed web pages.
 
