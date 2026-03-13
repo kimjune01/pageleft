@@ -9,10 +9,10 @@ Semantic search over copyleft-licensed web pages.
 ### Search
 
 ```
-GET /api/search?q=<query>&limit=20
+GET /api/search?q=<query>&limit=20&compiles
 ```
 
-Each page is split into paragraph-level chunks and each chunk is embedded separately, so queries match the specific paragraph that's relevant. Results are ranked by `semantic_score` (cosine similarity of the best-matching chunk) boosted by `rank_score` (PageRank). Snippets come from the matching paragraph, not a generic page summary.
+Each page is split into paragraph-level chunks and each chunk is embedded separately, so queries match the specific paragraph that's relevant. Results are ranked by `semantic_score` (cosine similarity of the best-matching chunk) boosted by `rank_score` (PageRank) and `quality` (compounding review scores). Pages flagged as compilable get a 2x ranking boost. Add `&compiles` to return only pages with reference implementations. Snippets come from the matching paragraph, not a generic page summary.
 
 If `q` is a URL (starts with `http://` or `https://`), PageLeft will fetch the page, verify it has a copyleft license, extract paragraphs, embed them, and include the page in results — all in one request. Pages without a copyleft license are rejected silently.
 
@@ -26,6 +26,15 @@ Workers donate crawl, embedding, and quality-review compute. Check `GET /api/sta
 4. `POST /api/contribute/embedding` — submit computed embedding (with `chunk_id` or `page_id` for backward compat)
 5. `GET /api/work/quality?limit=10` — claim random pages for quality review (returns `page_id`, `url`, `title`, `text_content`)
 6. `POST /api/contribute/quality` — submit quality score (`page_id`, `score` 0.0–1.0, `model` used). Each score compounds into the page's `quality` factor, which scales search ranking. No binary eviction — low-quality pages sink gradually.
+7. `POST /api/contribute/compilable` — flag a page as compilable (`page_id`, `compilable` bool). Pages with reference implementations get a 2x ranking boost.
+
+### Leaderboard
+
+```
+GET /api/leaderboard?type=review&n=10
+```
+
+Anonymous contributor rankings by hashed fingerprint. Filter by `type` (`review`, `embed`, `crawl`) or omit for all. `n` defaults to 10.
 
 ## Contributing
 
