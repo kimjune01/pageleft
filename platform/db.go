@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -509,7 +510,13 @@ func ContributorHash(ip string) string {
 }
 
 // SubmitQualityScore records a review and compounds the page's quality score.
+// Same contributor can only review a given page once.
 func (db *DB) SubmitQualityScore(pageID int64, score float64, model string, contributor string) error {
+	var exists int
+	db.conn.QueryRow(`SELECT COUNT(*) FROM quality_reviews WHERE page_id = ? AND contributor = ?`, pageID, contributor).Scan(&exists)
+	if exists > 0 {
+		return fmt.Errorf("already reviewed")
+	}
 	_, err := db.conn.Exec(`
 		INSERT INTO quality_reviews (page_id, score, model, contributor) VALUES (?, ?, ?, ?)`,
 		pageID, score, model, contributor)
@@ -576,6 +583,33 @@ func (db *DB) QualityCoverage(minReviews int) (float64, error) {
 		return 0, nil
 	}
 	return float64(reviewed) / float64(total), nil
+}
+
+// BackfillLinks scans all pages and inserts links where one page's text_content contains another page's URL.
+func (db *DB) BackfillLinks() (int, error) {
+	pages, err := db.AllPages()
+	if err != nil {
+		return 0, err
+	}
+	urlToID := make(map[string]int64, len(pages))
+	for _, p := range pages {
+		urlToID[p.URL] = p.ID
+	}
+	count := 0
+	for _, from := range pages {
+		for targetURL, targetID := range urlToID {
+			if targetID == from.ID {
+				continue
+			}
+			if strings.Contains(from.TextContent, targetURL) {
+				err := db.InsertLink(from.ID, targetID, "")
+				if err == nil {
+					count++
+				}
+			}
+		}
+	}
+	return count, nil
 }
 
 // SetCompilable marks a page as having a compilable spec or reference implementation.

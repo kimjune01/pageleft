@@ -20,7 +20,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: pageleft <crawl|reindex|serve|chunk-backfill>\n")
+		fmt.Fprintf(os.Stderr, "usage: pageleft <crawl|reindex|serve|chunk-backfill|link-backfill>\n")
 		os.Exit(1)
 	}
 
@@ -35,6 +35,8 @@ func main() {
 		cmdServe(dbPath)
 	case "chunk-backfill":
 		cmdChunkBackfill(dbPath)
+	case "link-backfill":
+		cmdLinkBackfill(dbPath)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
@@ -182,6 +184,27 @@ func cmdChunkBackfill(dbPath string) {
 	}
 
 	log.Printf("chunk-backfill complete: %d pages processed", total)
+}
+
+func cmdLinkBackfill(dbPath string) {
+	db, err := platform.NewDB(dbPath)
+	if err != nil {
+		log.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	log.Println("backfilling links...")
+	count, err := db.BackfillLinks()
+	if err != nil {
+		log.Fatalf("backfill links: %v", err)
+	}
+	log.Printf("inserted %d links", count)
+
+	log.Println("recomputing PageRank...")
+	if err := search.ComputePageRank(db); err != nil {
+		log.Fatalf("pagerank: %v", err)
+	}
+	log.Println("done")
 }
 
 func envOr(key, fallback string) string {
