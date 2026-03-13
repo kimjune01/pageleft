@@ -14,9 +14,12 @@ GET /api/search?q=<query>&limit=20&compiles
 
 - Chunks: each page is split into paragraphs, embedded separately. Queries match the specific paragraph, not a page average.
 - Ranking: `semantic_score` (cosine sim) * `rank_score` (PageRank) * `quality` (compounding review scores). Compilable pages get 2x.
-- `&compiles`: filter to pages with reference implementations only.
-- `&limit=N`: cap results (default 20).
 - If `q` is a URL, PageLeft fetches, verifies copyleft license, embeds, and indexes in one request.
+
+**Params:**
+- `q` — search query or URL to index
+- `limit` — max results (default 20)
+- `compiles` — return only pages with reference implementations
 
 ### Federated workers
 
