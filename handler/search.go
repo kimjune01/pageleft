@@ -253,7 +253,8 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleLeaderboard(w http.ResponseWriter, r *http.Request) {
-	contributors, _ := h.db.ContributorStats()
+	ctype := r.URL.Query().Get("type")
+	contributors, _ := h.db.ContributorStats(ctype)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(contributors)
 }

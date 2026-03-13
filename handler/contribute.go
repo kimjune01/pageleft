@@ -84,6 +84,7 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.db.LogContribution("crawl", platform.ContributorHash(r.RemoteAddr))
 	page := &platform.Page{
 		URL:         sub.URL,
 		Title:       sub.Title,
@@ -216,6 +217,7 @@ func (h *Handler) handleContributeEmbedding(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	h.db.LogContribution("embed", platform.ContributorHash(r.RemoteAddr))
 	if sub.ChunkID != 0 {
 		if err := h.db.UpdateChunkEmbedding(sub.ChunkID, sub.Embedding); err != nil {
 			http.Error(w, `{"error":"update chunk failed"}`, http.StatusInternalServerError)
@@ -306,6 +308,7 @@ func (h *Handler) handleContributeQuality(w http.ResponseWriter, r *http.Request
 	}
 
 	contributor := platform.ContributorHash(r.RemoteAddr)
+	h.db.LogContribution("review", contributor)
 	if err := h.db.SubmitQualityScore(sub.PageID, sub.Score, sub.Model, contributor); err != nil {
 		http.Error(w, `{"error":"submit failed"}`, http.StatusInternalServerError)
 		return

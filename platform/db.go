@@ -119,6 +119,13 @@ func (db *DB) migrate() error {
 			embedding JSON,
 			UNIQUE(page_id, idx)
 		);
+		CREATE TABLE IF NOT EXISTS contributions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			type TEXT NOT NULL,
+			contributor TEXT NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_contributions_type ON contributions(type);
 		CREATE TABLE IF NOT EXISTS quality_reviews (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			page_id INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
@@ -513,17 +520,31 @@ func (db *DB) SubmitQualityScore(pageID int64, score float64, model string, cont
 	return err
 }
 
-// ContributorStats returns unique contributor count and review count per contributor.
-type ContributorStat struct {
-	Contributor string `json:"contributor"`
-	Reviews     int    `json:"reviews"`
+// LogContribution records an anonymous contribution.
+func (db *DB) LogContribution(ctype string, contributor string) {
+	db.conn.Exec(`INSERT INTO contributions (type, contributor) VALUES (?, ?)`, ctype, contributor)
 }
 
-func (db *DB) ContributorStats() ([]ContributorStat, error) {
-	rows, err := db.conn.Query(`
-		SELECT contributor, COUNT(*) as reviews
-		FROM quality_reviews WHERE contributor != ''
-		GROUP BY contributor ORDER BY reviews DESC LIMIT 10`)
+type ContributorStat struct {
+	Contributor string `json:"contributor"`
+	Count       int    `json:"count"`
+}
+
+// ContributorStats returns top 10 contributors, optionally filtered by type.
+func (db *DB) ContributorStats(ctype string) ([]ContributorStat, error) {
+	var rows *sql.Rows
+	var err error
+	if ctype != "" {
+		rows, err = db.conn.Query(`
+			SELECT contributor, COUNT(*) as n
+			FROM contributions WHERE contributor != '' AND type = ?
+			GROUP BY contributor ORDER BY n DESC LIMIT 10`, ctype)
+	} else {
+		rows, err = db.conn.Query(`
+			SELECT contributor, COUNT(*) as n
+			FROM contributions WHERE contributor != ''
+			GROUP BY contributor ORDER BY n DESC LIMIT 10`)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -531,7 +552,7 @@ func (db *DB) ContributorStats() ([]ContributorStat, error) {
 	var stats []ContributorStat
 	for rows.Next() {
 		var s ContributorStat
-		if err := rows.Scan(&s.Contributor, &s.Reviews); err != nil {
+		if err := rows.Scan(&s.Contributor, &s.Count); err != nil {
 			return nil, err
 		}
 		stats = append(stats, s)

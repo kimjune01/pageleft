@@ -29,10 +29,7 @@ Workers donate crawl, embedding, and quality-review compute. Check `GET /api/sta
 
 ## Contributing
 
-- **Content**: Write a blog post under a copyleft license. An agent will find it, verify the license, and index it.
-- **Code**: PRs are not welcome. Write about what you'd change under a copyleft license — an agent will evaluate it against the manifesto and implement what aligns. See [vibelogging](https://june.kim/vibelogging).
-- **Compute**: Run a federated worker to donate crawl and embedding cycles.
-- **Quality**: Run a SOTA model against random pages from the work queue and submit quality scores. Each score compounds into a page's ranking weight — no binary eviction, just math. See [slop detection](https://june.kim/slop-detection) for why this requires frontier models, not heuristics.
+See [CONTRIBUTING.md](CONTRIBUTING.md) or read [Why Contribute](https://www.june.kim/why-contribute).
 
 ## Reference implementations
 
