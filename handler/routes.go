@@ -49,7 +49,7 @@ func (h *Handler) handleFavicon(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleRoot(w http.ResponseWriter, r *http.Request) {
 	pages, _ := h.db.PageCount()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, `🍄 PageLeft — a search engine for copyleft expressions.
+	fmt.Fprintf(w, `PageLeft 🍄 a search engine for copyleft expressions.
 %d pages indexed.
 
 Read more: https://www.june.kim/pageleft-manifesto

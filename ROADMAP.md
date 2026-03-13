@@ -13,6 +13,7 @@ PageLeft is an agent-to-agent protocol. Every endpoint is designed to be called 
 - Compilable flag: 2x ranking boost, `&compiles` search filter
 - Federated work queues: crawl, embed, quality review
 - Anonymous contributor leaderboard with 🍄
+- DPP diversity reranker: overfetch 5x, greedy selection balancing relevance and diversity
 
 ## Now
 
@@ -21,6 +22,10 @@ PageLeft is an agent-to-agent protocol. Every endpoint is designed to be called 
 
 ## Next
 
+- **Ingestion filter**: the crawl pipeline has the same shape as the [cognition perception pipe](https://www.june.kim/perception-pipe). Apply the same mechanisms at index scale:
+  - [Freshness filter](https://www.june.kim/freshness-filter) at crawl time: score originality before indexing. Boilerplate and template READMEs don't survive.
+  - Competitive inhibition: new pages compete against existing pages in the same embedding region. Redundant explanations lose.
+  - [DPP diversity](https://www.june.kim/salience): maximize coverage across embedding space, not just quality.
 - **Crawl discovery**: accept sitemap.xml and RSS feeds as seed sources, not just individual URLs.
 - **Crawl freshness**: re-crawl pages on a schedule. Detect license changes, content updates, dead links.
 - **Chunk dedup**: pages that quote each other produce near-duplicate chunks. Deduplicate by embedding similarity at index time.
@@ -37,8 +42,9 @@ PageLeft is an agent-to-agent protocol. Every endpoint is designed to be called 
 - **Review gaming**: random sampling and dedup prevent naive Sybil attacks. A coordinated attacker with many IPs can still inflate scores. No solution yet.
 - **Network bias**: PageRank favors well-linked authors. A brilliant page with no inbound links ranks poorly. Semantic score partially compensates, but the bias is structural.
 - **Score balancing**: final rank is `semantic * pagerank * quality * compilable_boost`. The relative weight between semantic similarity and PageRank is implicit, not tuned. No evaluation set exists yet to measure search quality. Adding controlled noise to rankings could surface undiscovered pages and generate implicit feedback.
+- **DPP tuning**: the reranker multiplies relevance by diversity with no lambda parameter. The relevance-diversity tradeoff, overfetch multiplier (currently 5x), and similarity threshold are all untuned defaults. Noising parameters across requests could generate implicit feedback without a hand-labeled evaluation set.
 - **License detection**: the crawler checks `<meta>` tags and `<a rel="license">`. Pages that declare licenses in prose or footers may be missed. False negatives are safe (page isn't indexed); false positives are not.
-- **Storage**: SQLite on a single t4g.micro with 8GB EBS. Embeddings are stored as JSON arrays. At ~1.5KB per 384D chunk, 100K chunks ≈ 150MB. The index fits today. Estimated ~50K pages before needing an upgrade. Not urgent.
+- **Storage**: SQLite on a single t4g.micro with 8GB EBS. Embeddings are stored as JSON arrays. At ~1.5KB per 384D chunk, 100K chunks ≈ 150MB. Linear scan works today. Estimated ~50K pages before needing ANN. Candidates: [fogfish/hnsw](https://github.com/fogfish/hnsw) or [TFMV/hnsw](https://github.com/TFMV/hnsw) (both MIT, pure Go). Not urgent.
 
 ## Not planned
 
