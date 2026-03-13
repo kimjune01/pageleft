@@ -235,6 +235,120 @@ func (h *Handler) handleContributeEmbedding(w http.ResponseWriter, r *http.Reque
 	json.NewEncoder(w).Encode(map[string]any{"accepted": true})
 }
 
+// handleWorkQuality returns random pages for quality review.
+// GET /api/work/quality?limit=10
+func (h *Handler) handleWorkQuality(w http.ResponseWriter, r *http.Request) {
+	limit := 10
+	if s := r.URL.Query().Get("limit"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+
+	pages, err := h.db.RandomPagesForReview(limit)
+	if err != nil {
+		http.Error(w, `{"error":"database error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	type qualityWork struct {
+		PageID  int64  `json:"page_id"`
+		URL     string `json:"url"`
+		Title   string `json:"title"`
+		Content string `json:"content"`
+	}
+	items := make([]qualityWork, len(pages))
+	for i, p := range pages {
+		content := p.TextContent
+		if len(content) > 2000 {
+			content = content[:2000]
+		}
+		items[i] = qualityWork{
+			PageID:  p.ID,
+			URL:     p.URL,
+			Title:   p.Title,
+			Content: content,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(items)
+}
+
+type qualitySubmission struct {
+	PageID int64   `json:"page_id"`
+	Score  float64 `json:"score"`
+	Model  string  `json:"model"`
+}
+
+// handleContributeQuality accepts a quality score from a federated reviewer.
+// POST /api/contribute/quality
+func (h *Handler) handleContributeQuality(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
+	if err != nil {
+		http.Error(w, `{"error":"read body failed"}`, http.StatusBadRequest)
+		return
+	}
+
+	var sub qualitySubmission
+	if err := json.Unmarshal(body, &sub); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+
+	if sub.PageID == 0 {
+		http.Error(w, `{"error":"page_id is required"}`, http.StatusBadRequest)
+		return
+	}
+	if sub.Score < 0 || sub.Score > 1 {
+		http.Error(w, `{"error":"score must be between 0 and 1"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.SubmitQualityScore(sub.PageID, sub.Score, sub.Model); err != nil {
+		http.Error(w, `{"error":"submit failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"accepted": true})
+}
+
+type compilableSubmission struct {
+	PageID     int64  `json:"page_id"`
+	Compilable bool   `json:"compilable"`
+	RepoURL    string `json:"repo_url"`
+}
+
+// handleContributeCompilable marks a page as compilable (has reference implementation).
+// POST /api/contribute/compilable
+func (h *Handler) handleContributeCompilable(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
+	if err != nil {
+		http.Error(w, `{"error":"read body failed"}`, http.StatusBadRequest)
+		return
+	}
+
+	var sub compilableSubmission
+	if err := json.Unmarshal(body, &sub); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+
+	if sub.PageID == 0 {
+		http.Error(w, `{"error":"page_id is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.SetCompilable(sub.PageID, sub.Compilable); err != nil {
+		http.Error(w, `{"error":"update failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"accepted": true})
+}
+
 // verifyLicense fetches a URL and checks for a copyleft license.
 func verifyLicense(pageURL string) (*crawler.LicenseInfo, error) {
 	client := &http.Client{Timeout: 30 * time.Second}

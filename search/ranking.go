@@ -31,12 +31,19 @@ func Search(pages []*platform.Page, queryEmb []float64, limit int) []Result {
 		if sim <= 0 {
 			continue
 		}
-		// FinalScore = similarity * (1 + log(1 + pagerank * N))
 		boost := 1.0 + math.Log(1.0+p.PageRank*n)
+		quality := p.Quality
+		if quality <= 0 {
+			quality = 1.0
+		}
+		compilableBoost := 1.0
+		if p.Compilable {
+			compilableBoost = 2.0
+		}
 		results = append(results, Result{
 			Page:       p,
 			Similarity: sim,
-			FinalScore: sim * boost,
+			FinalScore: sim * boost * quality * compilableBoost,
 		})
 	}
 
@@ -83,15 +90,25 @@ func SearchChunks(chunks []platform.ChunkWithPage, queryEmb []float64, totalPage
 	var results []Result
 	for _, s := range best {
 		boost := 1.0 + math.Log(1.0+s.chunk.PageRank*n)
+		quality := s.chunk.Quality
+		if quality <= 0 {
+			quality = 1.0
+		}
+		compilableBoost := 1.0
+		if s.chunk.Compilable {
+			compilableBoost = 2.0
+		}
 		results = append(results, Result{
 			Page: &platform.Page{
 				URL:         s.chunk.PageURL,
 				Title:       s.chunk.PageTitle,
 				PageRank:    s.chunk.PageRank,
+				Quality:     s.chunk.Quality,
+				Compilable:  s.chunk.Compilable,
 				LicenseType: s.chunk.LicenseType,
 			},
 			Similarity: s.sim,
-			FinalScore: s.sim * boost,
+			FinalScore: s.sim * boost * quality * compilableBoost,
 			Snippet:    s.chunk.Text,
 		})
 	}

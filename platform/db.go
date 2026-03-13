@@ -22,6 +22,8 @@ type Page struct {
 	LicenseType string
 	Embedding   []float64
 	PageRank    float64
+	Quality     float64
+	Compilable  bool
 	CrawledAt   time.Time
 	ContentHash string
 }
@@ -46,6 +48,8 @@ type ChunkWithPage struct {
 	PageURL     string
 	PageTitle   string
 	PageRank    float64
+	Quality     float64
+	Compilable  bool
 	LicenseType string
 }
 
@@ -113,11 +117,25 @@ func (db *DB) migrate() error {
 			embedding JSON,
 			UNIQUE(page_id, idx)
 		);
+		CREATE TABLE IF NOT EXISTS quality_reviews (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			page_id INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+			score REAL NOT NULL,
+			model TEXT NOT NULL DEFAULT '',
+			reviewed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
 		CREATE INDEX IF NOT EXISTS idx_pages_url ON pages(url);
 		CREATE INDEX IF NOT EXISTS idx_frontier_depth ON frontier(depth);
 		CREATE INDEX IF NOT EXISTS idx_chunks_page_id ON chunks(page_id);
+		CREATE INDEX IF NOT EXISTS idx_quality_reviews_page_id ON quality_reviews(page_id);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	// Add columns to pages (idempotent — ignore error if already exists)
+	db.conn.Exec("ALTER TABLE pages ADD COLUMN quality REAL NOT NULL DEFAULT 1.0")
+	db.conn.Exec("ALTER TABLE pages ADD COLUMN compilable INTEGER NOT NULL DEFAULT 0")
+	return nil
 }
 
 // --- Pages ---
@@ -151,8 +169,8 @@ func (db *DB) InsertPage(p *Page) (int64, error) {
 func (db *DB) GetPageByURL(url string) (*Page, error) {
 	p := &Page{}
 	var embJSON sql.NullString
-	err := db.conn.QueryRow("SELECT id, url, title, text_content, license_url, license_type, embedding, pagerank, crawled_at, content_hash FROM pages WHERE url = ?", url).
-		Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseURL, &p.LicenseType, &embJSON, &p.PageRank, &p.CrawledAt, &p.ContentHash)
+	err := db.conn.QueryRow("SELECT id, url, title, text_content, license_url, license_type, embedding, pagerank, quality, compilable, crawled_at, content_hash FROM pages WHERE url = ?", url).
+		Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseURL, &p.LicenseType, &embJSON, &p.PageRank, &p.Quality, &p.Compilable, &p.CrawledAt, &p.ContentHash)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +181,7 @@ func (db *DB) GetPageByURL(url string) (*Page, error) {
 }
 
 func (db *DB) AllPages() ([]*Page, error) {
-	rows, err := db.conn.Query("SELECT id, url, title, text_content, license_url, license_type, embedding, pagerank, crawled_at, content_hash FROM pages")
+	rows, err := db.conn.Query("SELECT id, url, title, text_content, license_url, license_type, embedding, pagerank, quality, compilable, crawled_at, content_hash FROM pages")
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +191,7 @@ func (db *DB) AllPages() ([]*Page, error) {
 	for rows.Next() {
 		p := &Page{}
 		var embJSON sql.NullString
-		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseURL, &p.LicenseType, &embJSON, &p.PageRank, &p.CrawledAt, &p.ContentHash); err != nil {
+		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseURL, &p.LicenseType, &embJSON, &p.PageRank, &p.Quality, &p.Compilable, &p.CrawledAt, &p.ContentHash); err != nil {
 			return nil, err
 		}
 		if embJSON.Valid && embJSON.String != "" {
@@ -363,7 +381,7 @@ func (db *DB) InsertChunks(pageID int64, chunks []Chunk) error {
 func (db *DB) AllChunksWithPages() ([]ChunkWithPage, error) {
 	rows, err := db.conn.Query(`
 		SELECT c.id, c.page_id, c.idx, c.text, c.embedding,
-		       p.url, p.title, p.pagerank, p.license_type
+		       p.url, p.title, p.pagerank, p.quality, p.compilable, p.license_type
 		FROM chunks c
 		JOIN pages p ON p.id = c.page_id
 		WHERE c.embedding IS NOT NULL AND c.embedding != '[]' AND c.embedding != 'null'`)
@@ -377,7 +395,7 @@ func (db *DB) AllChunksWithPages() ([]ChunkWithPage, error) {
 		var cw ChunkWithPage
 		var embJSON sql.NullString
 		if err := rows.Scan(&cw.ID, &cw.PageID, &cw.Idx, &cw.Text, &embJSON,
-			&cw.PageURL, &cw.PageTitle, &cw.PageRank, &cw.LicenseType); err != nil {
+			&cw.PageURL, &cw.PageTitle, &cw.PageRank, &cw.Quality, &cw.Compilable, &cw.LicenseType); err != nil {
 			return nil, err
 		}
 		if embJSON.Valid && embJSON.String != "" {
@@ -448,6 +466,69 @@ func (db *DB) ChunkCount() (int, error) {
 	var n int
 	err := db.conn.QueryRow("SELECT COUNT(*) FROM chunks").Scan(&n)
 	return n, err
+}
+
+// --- Quality ---
+
+// RandomPagesForReview returns random pages for quality review.
+func (db *DB) RandomPagesForReview(limit int) ([]*Page, error) {
+	rows, err := db.conn.Query(`
+		SELECT id, url, title, text_content, license_type, quality
+		FROM pages ORDER BY RANDOM() LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var pages []*Page
+	for rows.Next() {
+		p := &Page{}
+		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseType, &p.Quality); err != nil {
+			return nil, err
+		}
+		pages = append(pages, p)
+	}
+	return pages, nil
+}
+
+// SubmitQualityScore records a review and compounds the page's quality score.
+func (db *DB) SubmitQualityScore(pageID int64, score float64, model string) error {
+	_, err := db.conn.Exec(`
+		INSERT INTO quality_reviews (page_id, score, model) VALUES (?, ?, ?)`,
+		pageID, score, model)
+	if err != nil {
+		return fmt.Errorf("insert review: %w", err)
+	}
+	_, err = db.conn.Exec(`UPDATE pages SET quality = quality * ? WHERE id = ?`, score, pageID)
+	return err
+}
+
+// QualityCoverage returns the fraction of pages with at least minReviews reviews.
+func (db *DB) QualityCoverage(minReviews int) (float64, error) {
+	total, err := db.PageCount()
+	if err != nil || total == 0 {
+		return 0, err
+	}
+	var reviewed int
+	err = db.conn.QueryRow(`
+		SELECT COUNT(*) FROM (
+			SELECT page_id FROM quality_reviews
+			GROUP BY page_id HAVING COUNT(*) >= ?
+		)`, minReviews).Scan(&reviewed)
+	if err != nil {
+		return 0, nil
+	}
+	return float64(reviewed) / float64(total), nil
+}
+
+// SetCompilable marks a page as having a compilable spec or reference implementation.
+func (db *DB) SetCompilable(pageID int64, compilable bool) error {
+	v := 0
+	if compilable {
+		v = 1
+	}
+	_, err := db.conn.Exec("UPDATE pages SET compilable = ? WHERE id = ?", v, pageID)
+	return err
 }
 
 func (db *DB) IsURLKnown(url string) (bool, error) {

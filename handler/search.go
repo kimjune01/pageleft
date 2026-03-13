@@ -23,6 +23,7 @@ type searchResult struct {
 	Title         string  `json:"title"`
 	Snippet       string  `json:"snippet"`
 	License       string  `json:"license"`
+	Compilable    bool    `json:"compilable"`
 	SemanticScore float64 `json:"semantic_score"`
 	RankScore     float64 `json:"rank_score"`
 }
@@ -98,6 +99,7 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 			Title:         r.Page.Title,
 			Snippet:       snippet,
 			License:       r.Page.LicenseType,
+			Compilable:    r.Page.Compilable,
 			SemanticScore: r.Similarity,
 			RankScore:     r.Page.PageRank,
 		})
@@ -108,11 +110,12 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 type statsResponse struct {
-	Pages          int    `json:"pages"`
-	Chunks         int    `json:"chunks"`
-	Links          int    `json:"links"`
-	EmbeddingModel string `json:"embedding_model"`
-	EmbeddingDim   int    `json:"embedding_dim"`
+	Pages           int     `json:"pages"`
+	Chunks          int     `json:"chunks"`
+	Links           int     `json:"links"`
+	QualityCoverage float64 `json:"quality_coverage"`
+	EmbeddingModel  string  `json:"embedding_model"`
+	EmbeddingDim    int     `json:"embedding_dim"`
 }
 
 // indexURL fetches a URL, checks for a copyleft license, extracts content,
@@ -224,14 +227,16 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 	pages, _ := h.db.PageCount()
 	chunks, _ := h.db.ChunkCount()
 	links, _ := h.db.LinkCount()
+	qualityCov, _ := h.db.QualityCoverage(3)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(statsResponse{
-		Pages:          pages,
-		Chunks:         chunks,
-		Links:          links,
-		EmbeddingModel: platform.EmbeddingModel,
-		EmbeddingDim:   platform.EmbeddingDim,
+		Pages:           pages,
+		Chunks:          chunks,
+		Links:           links,
+		QualityCoverage: qualityCov,
+		EmbeddingModel:  platform.EmbeddingModel,
+		EmbeddingDim:    platform.EmbeddingDim,
 	})
 }
 

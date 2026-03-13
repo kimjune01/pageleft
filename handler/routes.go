@@ -31,7 +31,10 @@ func (h *Handler) Mux() http.Handler {
 	mux.HandleFunc("GET /api/frontier", h.handleFrontier)
 	mux.HandleFunc("POST /api/contribute/page", h.handleContributePage)
 	mux.HandleFunc("GET /api/work/embed", h.handleWorkEmbed)
+	mux.HandleFunc("GET /api/work/quality", h.handleWorkQuality)
 	mux.HandleFunc("POST /api/contribute/embedding", h.handleContributeEmbedding)
+	mux.HandleFunc("POST /api/contribute/quality", h.handleContributeQuality)
+	mux.HandleFunc("POST /api/contribute/compilable", h.handleContributeCompilable)
 	return mux
 }
 
