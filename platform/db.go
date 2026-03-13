@@ -1,7 +1,9 @@
 package platform
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -122,6 +124,7 @@ func (db *DB) migrate() error {
 			page_id INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
 			score REAL NOT NULL,
 			model TEXT NOT NULL DEFAULT '',
+			contributor TEXT NOT NULL DEFAULT '',
 			reviewed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
 		CREATE INDEX IF NOT EXISTS idx_pages_url ON pages(url);
@@ -132,9 +135,10 @@ func (db *DB) migrate() error {
 	if err != nil {
 		return err
 	}
-	// Add columns to pages (idempotent — ignore error if already exists)
+	// Add columns (idempotent — ignore error if already exists)
 	db.conn.Exec("ALTER TABLE pages ADD COLUMN quality REAL NOT NULL DEFAULT 1.0")
 	db.conn.Exec("ALTER TABLE pages ADD COLUMN compilable INTEGER NOT NULL DEFAULT 0")
+	db.conn.Exec("ALTER TABLE quality_reviews ADD COLUMN contributor TEXT NOT NULL DEFAULT ''")
 	return nil
 }
 
@@ -491,16 +495,48 @@ func (db *DB) RandomPagesForReview(limit int) ([]*Page, error) {
 	return pages, nil
 }
 
+// ContributorHash returns a truncated SHA-256 of the IP for anonymous fingerprinting.
+func ContributorHash(ip string) string {
+	h := sha256.Sum256([]byte(ip))
+	return hex.EncodeToString(h[:8])
+}
+
 // SubmitQualityScore records a review and compounds the page's quality score.
-func (db *DB) SubmitQualityScore(pageID int64, score float64, model string) error {
+func (db *DB) SubmitQualityScore(pageID int64, score float64, model string, contributor string) error {
 	_, err := db.conn.Exec(`
-		INSERT INTO quality_reviews (page_id, score, model) VALUES (?, ?, ?)`,
-		pageID, score, model)
+		INSERT INTO quality_reviews (page_id, score, model, contributor) VALUES (?, ?, ?, ?)`,
+		pageID, score, model, contributor)
 	if err != nil {
 		return fmt.Errorf("insert review: %w", err)
 	}
 	_, err = db.conn.Exec(`UPDATE pages SET quality = quality * ? WHERE id = ?`, score, pageID)
 	return err
+}
+
+// ContributorStats returns unique contributor count and review count per contributor.
+type ContributorStat struct {
+	Contributor string `json:"contributor"`
+	Reviews     int    `json:"reviews"`
+}
+
+func (db *DB) ContributorStats() ([]ContributorStat, error) {
+	rows, err := db.conn.Query(`
+		SELECT contributor, COUNT(*) as reviews
+		FROM quality_reviews WHERE contributor != ''
+		GROUP BY contributor ORDER BY reviews DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var stats []ContributorStat
+	for rows.Next() {
+		var s ContributorStat
+		if err := rows.Scan(&s.Contributor, &s.Reviews); err != nil {
+			return nil, err
+		}
+		stats = append(stats, s)
+	}
+	return stats, nil
 }
 
 // QualityCoverage returns the fraction of pages with at least minReviews reviews.

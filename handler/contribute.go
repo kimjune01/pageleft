@@ -305,7 +305,8 @@ func (h *Handler) handleContributeQuality(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := h.db.SubmitQualityScore(sub.PageID, sub.Score, sub.Model); err != nil {
+	contributor := platform.ContributorHash(r.RemoteAddr)
+	if err := h.db.SubmitQualityScore(sub.PageID, sub.Score, sub.Model, contributor); err != nil {
 		http.Error(w, `{"error":"submit failed"}`, http.StatusInternalServerError)
 		return
 	}

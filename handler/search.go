@@ -122,12 +122,13 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 type statsResponse struct {
-	Pages           int     `json:"pages"`
-	Chunks          int     `json:"chunks"`
-	Links           int     `json:"links"`
-	QualityCoverage float64 `json:"quality_coverage"`
-	EmbeddingModel  string  `json:"embedding_model"`
-	EmbeddingDim    int     `json:"embedding_dim"`
+	Pages           int                       `json:"pages"`
+	Chunks          int                       `json:"chunks"`
+	Links           int                       `json:"links"`
+	QualityCoverage float64                   `json:"quality_coverage"`
+	Contributors    []platform.ContributorStat `json:"contributors,omitempty"`
+	EmbeddingModel  string                    `json:"embedding_model"`
+	EmbeddingDim    int                       `json:"embedding_dim"`
 }
 
 // indexURL fetches a URL, checks for a copyleft license, extracts content,
@@ -240,6 +241,7 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 	chunks, _ := h.db.ChunkCount()
 	links, _ := h.db.LinkCount()
 	qualityCov, _ := h.db.QualityCoverage(3)
+	contributors, _ := h.db.ContributorStats()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(statsResponse{
@@ -247,6 +249,7 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 		Chunks:          chunks,
 		Links:           links,
 		QualityCoverage: qualityCov,
+		Contributors:    contributors,
 		EmbeddingModel:  platform.EmbeddingModel,
 		EmbeddingDim:    platform.EmbeddingDim,
 	})
