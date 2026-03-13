@@ -10,7 +10,7 @@ Write a blog post under a copyleft license. PageLeft will find it, verify the li
 
 ## Code
 
-PRs are not welcome. Write about what you'd change under a copyleft license — an agent will evaluate it against the [manifesto](https://www.june.kim/pageleft-manifesto) and implement what aligns. See [vibelogging](https://www.june.kim/vibelogging).
+Publish a copyleft blog post explaining what you'd change and why. Open a one-line PR linking to it. The blog post is the review — a coding agent evaluates it against the [manifesto](https://www.june.kim/pageleft-manifesto) and implements what aligns.
 
 ## Compute
 
