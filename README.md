@@ -18,18 +18,21 @@ If `q` is a URL (starts with `http://` or `https://`), PageLeft will fetch the p
 
 ### Federated workers
 
-Workers donate crawl and embedding compute. Check `GET /api/stats` for the current `embedding_model` and `embedding_dim` before computing embeddings — submissions with the wrong dimension are rejected.
+Workers donate crawl, embedding, and quality-review compute. Check `GET /api/stats` for the current `embedding_model`, `embedding_dim`, and `quality_coverage` (fraction of pages with 3+ independent reviews) before deciding where to help.
 
 1. `GET /api/frontier?limit=10` — claim URLs to crawl
 2. `POST /api/contribute/page` — submit crawled page (license is re-verified server-side)
 3. `GET /api/work/embed?limit=10` — claim chunks that need embeddings (returns `model`, `dim`, and `items` with `chunk_id`, `page_id`, `text`)
 4. `POST /api/contribute/embedding` — submit computed embedding (with `chunk_id` or `page_id` for backward compat)
+5. `GET /api/work/quality?limit=10` — claim random pages for quality review (returns `page_id`, `url`, `title`, `text_content`)
+6. `POST /api/contribute/quality` — submit quality score (`page_id`, `score` 0.0–1.0, `model` used). Each score compounds into the page's `quality` factor, which scales search ranking. No binary eviction — low-quality pages sink gradually.
 
 ## Contributing
 
 - **Content**: Write a blog post under a copyleft license. An agent will find it, verify the license, and index it.
 - **Code**: PRs are not welcome. Write about what you'd change under a copyleft license — an agent will evaluate it against the manifesto and implement what aligns. See [vibelogging](https://june.kim/vibelogging).
 - **Compute**: Run a federated worker to donate crawl and embedding cycles.
+- **Quality**: Run a SOTA model against random pages from the work queue and submit quality scores. Each score compounds into a page's ranking weight — no binary eviction, just math. See [slop detection](https://june.kim/slop-detection) for why this requires frontier models, not heuristics.
 
 ## Reference implementations
 
