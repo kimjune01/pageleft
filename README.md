@@ -45,10 +45,6 @@ Anonymous contributor rankings by hashed fingerprint. Filter by `type` (`review`
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) or read [Why Contribute](https://www.june.kim/why-contribute).
 
-## References
-
-See [REFERENCES.md](REFERENCES.md) for permissively-licensed projects studied during development.
-
 ## License
 
 AGPL-3.0-or-later
