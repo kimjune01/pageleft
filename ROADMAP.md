@@ -1,0 +1,47 @@
+# Roadmap
+
+What exists, what's next, and what's blocked.
+
+PageLeft is an agent-to-agent protocol. Every endpoint is designed to be called by scripts and coding agents, not browsers. Humans write the pages. Agents crawl, embed, review, search, and build on them.
+
+## Done
+
+- Semantic search over copyleft-licensed pages (CC BY-SA, AGPL, GPL, etc.)
+- Per-paragraph chunk embeddings (BGE-small-en-v1.5, 384D)
+- PageRank from inter-page link graph (1,114 links across 314 pages)
+- Quality review system: compounding scores, random sampling, quality_coverage metric
+- Compilable flag: 2x ranking boost, `&compiles` search filter
+- Federated work queues: crawl, embed, quality review
+- Anonymous contributor leaderboard with 🍄
+
+## Now
+
+- **Cold start**: 314 pages, 0 reviews. Seed the index by crawling known copyleft sources (Arch Wiki, MDN, Wikipedia portals) and self-seeding quality reviews with a local model.
+- **Worker client**: a reference script that pulls from `/api/work/*`, runs a local model, and submits results. Lowers the barrier from "read the API docs" to "run this script."
+
+## Next
+
+- **Crawl discovery**: accept sitemap.xml and RSS feeds as seed sources, not just individual URLs.
+- **Crawl freshness**: re-crawl pages on a schedule. Detect license changes, content updates, dead links.
+- **Chunk dedup**: pages that quote each other produce near-duplicate chunks. Deduplicate by embedding similarity at index time.
+- **Snippet highlighting**: return the matching chunk text with query terms bolded in search results.
+
+## Later
+
+- **Multi-model embeddings**: accept embeddings from different models, normalize to a common similarity space.
+- **License evolution tracking**: detect when a page changes its license (e.g., drops CC BY-SA). Soft-delete from index, keep the record.
+- **Canon integration**: index the critique alongside the code it changed. Requires PageLeft to understand git history.
+
+## Open problems
+
+- **Review gaming**: random sampling and dedup prevent naive Sybil attacks. A coordinated attacker with many IPs can still inflate scores. No solution yet.
+- **Network bias**: PageRank favors well-linked authors. A brilliant page with no inbound links ranks poorly. Semantic score partially compensates, but the bias is structural.
+- **Score balancing**: final rank is `semantic * pagerank * quality * compilable_boost`. The relative weight between semantic similarity and PageRank is implicit, not tuned. No evaluation set exists yet to measure search quality. Adding controlled noise to rankings could surface undiscovered pages and generate implicit feedback.
+- **License detection**: the crawler checks `<meta>` tags and `<a rel="license">`. Pages that declare licenses in prose or footers may be missed. False negatives are safe (page isn't indexed); false positives are not.
+- **Storage**: SQLite on a single t4g.micro with 8GB EBS. Embeddings are stored as JSON arrays. At ~1.5KB per 384D chunk, 100K chunks ≈ 150MB. The index fits today. Estimated ~50K pages before needing an upgrade. Not urgent.
+
+## Not planned
+
+- **Web UI**: Canon needs no face. This is an A2A protocol.
+- **Accounts / auth**: contributions are anonymous by design. The leaderboard uses hashed fingerprints.
+- **Moderation dashboard**: quality scores compound. Low-quality pages sink. No binary eviction, no manual review queue.
