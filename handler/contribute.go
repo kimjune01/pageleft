@@ -148,7 +148,9 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleWorkEmbed returns chunks (or pages) that need embeddings computed.
+// handleWorkEmbed returns chunks that need embeddings computed.
+// Every item has the same shape: {chunk_id, page_id, text}.
+// Pages without chunks are chunked on demand before serving.
 // GET /api/work/embed?limit=10
 func (h *Handler) handleWorkEmbed(w http.ResponseWriter, r *http.Request) {
 	limit := 10
@@ -158,20 +160,20 @@ func (h *Handler) handleWorkEmbed(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	type chunkWork struct {
+		ChunkID int64  `json:"chunk_id"`
+		PageID  int64  `json:"page_id"`
+		Text    string `json:"text"`
+	}
 	type workResponse struct {
-		Model string `json:"model"`
-		Dim   int    `json:"dim"`
-		Items any    `json:"items"`
+		Model string      `json:"model"`
+		Dim   int         `json:"dim"`
+		Items []chunkWork `json:"items"`
 	}
 
-	// Prefer chunk work items
+	// Try chunk work items first.
 	chunks, err := h.db.ChunksWithoutEmbeddings(limit)
 	if err == nil && len(chunks) > 0 {
-		type chunkWork struct {
-			ChunkID int64  `json:"chunk_id"`
-			PageID  int64  `json:"page_id"`
-			Text    string `json:"text"`
-		}
 		items := make([]chunkWork, len(chunks))
 		for i, c := range chunks {
 			items[i] = chunkWork{
@@ -189,29 +191,41 @@ func (h *Handler) handleWorkEmbed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fallback to page-level work
-	pages, err := h.db.PagesWithoutEmbeddings(limit)
+	// No unembedded chunks. Check for pages that were never chunked.
+	pages, err := h.db.PagesWithoutChunks(limit)
 	if err != nil {
 		http.Error(w, `{"error":"database error"}`, http.StatusInternalServerError)
 		return
 	}
 
-	type embedWork struct {
-		PageID      int64  `json:"page_id"`
-		Title       string `json:"title"`
-		TextContent string `json:"text_content"`
-	}
-	items := make([]embedWork, len(pages))
-	for i, p := range pages {
-		text := p.TextContent
-		words := strings.Fields(text)
-		if len(words) > 500 {
-			text = strings.Join(words[:500], " ")
+	// Chunk them from stored text_content and insert.
+	var allChunks []chunkWork
+	for _, p := range pages {
+		paragraphs := splitTextContent(p.TextContent)
+		if len(paragraphs) == 0 {
+			continue
 		}
-		items[i] = embedWork{
-			PageID:      p.ID,
-			Title:       p.Title,
-			TextContent: text,
+		dbChunks := make([]platform.Chunk, len(paragraphs))
+		for i, text := range paragraphs {
+			dbChunks[i] = platform.Chunk{PageID: p.ID, Idx: i, Text: text}
+		}
+		if err := h.db.InsertChunks(p.ID, dbChunks); err != nil {
+			log.Printf("auto-chunk page %d (%s): %v", p.ID, p.URL, err)
+			continue
+		}
+		// Re-fetch the inserted chunks to get their IDs.
+		inserted, err := h.db.ChunksWithoutEmbeddings(len(paragraphs))
+		if err != nil {
+			continue
+		}
+		for _, c := range inserted {
+			if c.PageID == p.ID {
+				allChunks = append(allChunks, chunkWork{
+					ChunkID: c.ID,
+					PageID:  c.PageID,
+					Text:    c.Text,
+				})
+			}
 		}
 	}
 
@@ -219,8 +233,21 @@ func (h *Handler) handleWorkEmbed(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(workResponse{
 		Model: platform.EmbeddingModel,
 		Dim:   platform.EmbeddingDim,
-		Items: items,
+		Items: allChunks,
 	})
+}
+
+// splitTextContent splits plain text into paragraph-sized chunks.
+// Used when a page was stored without HTML parsing (no *html.Node available).
+func splitTextContent(text string) []string {
+	var paragraphs []string
+	for _, p := range strings.Split(text, "\n") {
+		p = strings.TrimSpace(p)
+		if len(p) > 20 { // skip blank lines and trivial fragments
+			paragraphs = append(paragraphs, p)
+		}
+	}
+	return paragraphs
 }
 
 // embeddingSubmission is the JSON body for POST /api/contribute/embedding.

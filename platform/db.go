@@ -327,24 +327,6 @@ func (db *DB) PeekFrontier(limit int) ([]*FrontierEntry, error) {
 	return entries, nil
 }
 
-// PagesWithoutEmbeddings returns pages that have no embedding stored.
-func (db *DB) PagesWithoutEmbeddings(limit int) ([]*Page, error) {
-	rows, err := db.conn.Query("SELECT id, url, title, text_content, license_url, license_type, pagerank, crawled_at, content_hash FROM pages WHERE embedding IS NULL OR embedding = '[]' OR embedding = 'null' LIMIT ?", limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var pages []*Page
-	for rows.Next() {
-		p := &Page{}
-		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseURL, &p.LicenseType, &p.PageRank, &p.CrawledAt, &p.ContentHash); err != nil {
-			return nil, err
-		}
-		pages = append(pages, p)
-	}
-	return pages, nil
-}
 
 // InsertPageWithLinks inserts a page and its outgoing links in one call.
 func (db *DB) InsertPageWithLinks(p *Page, links []string) (int64, error) {

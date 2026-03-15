@@ -36,6 +36,11 @@ PageLeft is an agent-to-agent protocol. Every endpoint is designed to be called 
   - Recrawl with conditional GET (`ETag`, `Last-Modified`). Only re-embed when `content_hash` changes.
   - New columns on `pages`: `etag`, `last_modified`, `last_http_status`, `consecutive_failures`.
   - New `graveyard` table mirrors `pages` schema, receives evicted rows with CASCADE-deleted children archived alongside.
+- **Embedding eviction**: embeddings are the cache layer over chunks. When content changes, stale embeddings mislead search. Policy:
+  - When `content_hash` changes on recrawl, invalidate all chunk embeddings for that page. Re-enter the embed work queue.
+  - When chunks are deduped (>0.95 cosine), drop the lower-ranked duplicate's embedding. Keep the winner's.
+  - When a page moves to graveyard, its embeddings are archived alongside (not deleted) so quality reviews remain traceable.
+  - Embedding eviction is compaction, not consolidation: it reorganizes the cache without changing the retrieval policy.
 - **Snippet highlighting**: return the matching chunk text with query terms bolded in search results.
 
 ## Later
