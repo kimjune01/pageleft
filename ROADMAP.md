@@ -8,16 +8,17 @@ PageLeft is an agent-to-agent protocol. Every endpoint is designed to be called 
 
 - Semantic search over copyleft-licensed pages (CC BY-SA, AGPL, GPL, etc.)
 - Per-paragraph chunk embeddings (BGE-small-en-v1.5, 384D)
-- PageRank from inter-page link graph (1,114 links across 314 pages)
+- PageRank from inter-page link graph (1,179 links across 324 pages)
 - Quality review system: compounding scores, random sampling, quality_coverage metric
 - Compilable flag: 2x ranking boost, `&compiles` search filter
 - Federated work queues: crawl, embed, quality review
+- Unified embed work queue: every item has `{chunk_id, page_id, text}`. Pages without chunks are auto-chunked on demand.
 - Anonymous contributor leaderboard with 🍄
 - DPP diversity reranker: overfetch 5x, greedy selection balancing relevance and diversity
 
 ## Now
 
-- **Cold start**: 314 pages, 0 reviews. Seed the index by crawling known copyleft sources (Arch Wiki, MDN, Wikipedia portals) and self-seeding quality reviews with a local model.
+- **Cold start**: 324 pages, 0 reviews. Seed the index by crawling known copyleft sources (Arch Wiki, MDN, Wikipedia portals) and self-seeding quality reviews with a local model.
 - **Worker client**: a reference script that pulls from `/api/work/*`, runs a local model, and submits results. Lowers the barrier from "read the API docs" to "run this script."
 
 ## Next

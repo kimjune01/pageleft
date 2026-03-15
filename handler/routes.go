@@ -48,17 +48,27 @@ func (h *Handler) handleFavicon(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleRoot(w http.ResponseWriter, r *http.Request) {
 	pages, _ := h.db.PageCount()
+	chunks, _ := h.db.ChunkCount()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprintf(w, `PageLeft 🍄 a search engine for copyleft expressions.
-%d pages indexed.
+%d pages, %d chunks indexed.
 
 Read more: https://www.june.kim/pageleft-manifesto
 Source:    https://github.com/kimjune01/pageleft
 
 API
-  GET  /api/search?q=<query>        Search by natural language
-  GET  /api/frontier                Next URLs to crawl
+  GET  /api/search?q=<query>          Search by natural language
+  GET  /api/stats                     Index stats
+  GET  /api/leaderboard               Contributor rankings
+
+Contribute
+  GET  /api/frontier                  Claim URLs to crawl
+  POST /api/contribute/page           Submit crawled page {"url":"..."}
+  GET  /api/work/embed?limit=10       Claim chunks to embed {chunk_id, page_id, text}
+  POST /api/contribute/embedding      Submit embedding {chunk_id, embedding}
+  GET  /api/work/quality?limit=10     Claim pages to review
+  POST /api/contribute/quality        Submit quality score {page_id, score, model}
 
 Try:  curl https://pageleft.cc/api/search?q=open+source+licensing
-`, pages)
+`, pages, chunks)
 }
