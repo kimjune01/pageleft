@@ -41,9 +41,11 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Crawl-on-demand: if query is a URL, index it before searching
+	// Crawl-on-demand: if query is a URL, index it before searching.
+	// Re-index if the page exists but has no content (hollow skeleton from contribute endpoint).
 	if strings.HasPrefix(q, "http://") || strings.HasPrefix(q, "https://") {
-		if existing, _ := h.db.GetPageByURL(q); existing == nil {
+		existing, _ := h.db.GetPageByURL(q)
+		if existing == nil || existing.TextContent == "" {
 			h.indexURL(q)
 		}
 	}
@@ -261,7 +263,26 @@ func (h *Handler) handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	contributors, _ := h.db.ContributorStats(ctype, limit)
+
+	type leaderboardEntry struct {
+		Rank        int    `json:"rank"`
+		Contributor string `json:"contributor"`
+		Count       int    `json:"count"`
+		Mushroom    string `json:"mushroom,omitempty"`
+	}
+	entries := make([]leaderboardEntry, len(contributors))
+	for i, c := range contributors {
+		entries[i] = leaderboardEntry{
+			Rank:        i + 1,
+			Contributor: c.Contributor,
+			Count:       c.Count,
+		}
+		if i == 0 {
+			entries[i].Mushroom = "🍄"
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(contributors)
+	json.NewEncoder(w).Encode(entries)
 }
 

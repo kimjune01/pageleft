@@ -29,6 +29,13 @@ PageLeft is an agent-to-agent protocol. Every endpoint is designed to be called 
 - **Crawl discovery**: accept sitemap.xml and RSS feeds as seed sources, not just individual URLs.
 - **Crawl freshness**: re-crawl pages on a schedule. Detect license changes, content updates, dead links.
 - **Chunk dedup**: pages that quote each other produce near-duplicate chunks. Deduplicate by embedding similarity at index time.
+- **Index eviction**: the index is not a cache — it's a provenance layer. LLMs already carry popular copyleft knowledge but strip attribution and license terms. PageLeft is the only path that preserves the chain. So eviction is conservative and never popularity-based:
+  - Dead pages (3+ consecutive 404s) → graveyard table, not hard delete. Preserves quality reviews and metadata for restoration.
+  - License revoked or changed to non-copyleft → graveyard, keep the record.
+  - Redundant chunks (>0.95 cosine similarity across pages) → dedup, keep highest-ranked source.
+  - Recrawl with conditional GET (`ETag`, `Last-Modified`). Only re-embed when `content_hash` changes.
+  - New columns on `pages`: `etag`, `last_modified`, `last_http_status`, `consecutive_failures`.
+  - New `graveyard` table mirrors `pages` schema, receives evicted rows with CASCADE-deleted children archived alongside.
 - **Snippet highlighting**: return the matching chunk text with query terms bolded in search results.
 
 ## Later
@@ -50,4 +57,5 @@ PageLeft is an agent-to-agent protocol. Every endpoint is designed to be called 
 
 - **Web UI**: Canon needs no face. This is an A2A protocol.
 - **Accounts / auth**: contributions are anonymous by design. The leaderboard uses hashed fingerprints.
-- **Moderation dashboard**: quality scores compound. Low-quality pages sink. No binary eviction, no manual review queue.
+- **Moderation dashboard**: quality scores compound. Low-quality pages sink. No manual review queue.
+- **Popularity-based eviction**: LLMs carry popular knowledge but strip the license. Evicting well-known copyleft content cedes provenance to models that don't attribute. PageLeft keeps what others won't cite.

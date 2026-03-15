@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -57,6 +58,9 @@ type pageSubmission struct {
 }
 
 // handleContributePage accepts a crawled page from a federated worker.
+// A bare {"url":"..."} is enough — the server extracts title, text, chunks,
+// and links from the page it already fetches for license verification.
+// Workers may still supply rich payloads; server-extracted fields only fill gaps.
 // POST /api/contribute/page
 func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 5*1024*1024))
@@ -76,12 +80,26 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Trust but verify: re-fetch the URL and check for copyleft license
-	license, err := verifyLicense(sub.URL)
+	// Fetch the page, verify copyleft license, and keep the parsed HTML.
+	result, err := fetchAndVerify(sub.URL)
 	if err != nil {
 		log.Printf("license verification failed for %s: %v", sub.URL, err)
 		http.Error(w, fmt.Sprintf(`{"error":"license verification failed: %v"}`, err), http.StatusUnprocessableEntity)
 		return
+	}
+
+	// Fill in any fields the submitter didn't provide.
+	if sub.Title == "" {
+		sub.Title = crawler.ExtractTitle(result.Doc)
+	}
+	if sub.TextContent == "" {
+		sub.TextContent = crawler.ExtractText(result.Doc)
+	}
+	if sub.ContentHash == "" {
+		sub.ContentHash = result.BodyHash
+	}
+	if len(sub.Links) == 0 {
+		sub.Links = crawler.ExtractLinks(result.Doc, result.FinalURL)
 	}
 
 	h.db.LogContribution("crawl", platform.ContributorHash(r.RemoteAddr))
@@ -89,8 +107,8 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 		URL:         sub.URL,
 		Title:       sub.Title,
 		TextContent: sub.TextContent,
-		LicenseURL:  license.URL,
-		LicenseType: license.Type,
+		LicenseURL:  result.License.URL,
+		LicenseType: result.License.Type,
 		ContentHash: sub.ContentHash,
 		CrawledAt:   time.Now(),
 	}
@@ -101,11 +119,32 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Extract paragraphs and insert as chunks (embeddings come from the work queue).
+	paragraphs := crawler.ExtractParagraphs(result.Doc)
+	chunks := make([]platform.Chunk, 0, len(paragraphs))
+	for i, text := range paragraphs {
+		chunks = append(chunks, platform.Chunk{
+			PageID: pageID,
+			Idx:    i,
+			Text:   text,
+		})
+	}
+	if len(chunks) > 0 {
+		if err := h.db.InsertChunks(pageID, chunks); err != nil {
+			log.Printf("insert chunks for %s: %v", sub.URL, err)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"accepted": true,
 		"page_id":  pageID,
-		"license":  license.Type,
+		"license":  result.License.Type,
+		"chunks":   len(chunks),
+		"next": map[string]string{
+			"embed":   "GET /api/work/embed?limit=10 — compute embeddings to make this page searchable",
+			"quality": "GET /api/work/quality?limit=10 — review pages for quality scores",
+		},
 	})
 }
 
@@ -353,8 +392,17 @@ func (h *Handler) handleContributeCompilable(w http.ResponseWriter, r *http.Requ
 	json.NewEncoder(w).Encode(map[string]any{"accepted": true})
 }
 
-// verifyLicense fetches a URL and checks for a copyleft license.
-func verifyLicense(pageURL string) (*crawler.LicenseInfo, error) {
+// fetchResult holds the parsed page and license from a verification fetch.
+type fetchResult struct {
+	License  *crawler.LicenseInfo
+	Doc      *html.Node
+	FinalURL string
+	BodyHash string
+}
+
+// fetchAndVerify fetches a URL, checks for a copyleft license, and returns
+// the parsed HTML so callers can extract content without a second fetch.
+func fetchAndVerify(pageURL string) (*fetchResult, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Get(pageURL)
 	if err != nil {
@@ -386,5 +434,11 @@ func verifyLicense(pageURL string) (*crawler.LicenseInfo, error) {
 		return nil, fmt.Errorf("no copyleft license found")
 	}
 
-	return license, nil
+	h := fmt.Sprintf("%x", sha256.Sum256(bodyBytes))
+	return &fetchResult{
+		License:  license,
+		Doc:      doc,
+		FinalURL: resp.Request.URL.String(),
+		BodyHash: h,
+	}, nil
 }
