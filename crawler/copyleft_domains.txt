@@ -1,0 +1,9 @@
+# Domains verified as copyleft at the site/project level.
+# Format: domain <tab> license_type <tab> license_url
+# The license applies to all pages under the domain.
+
+bartoszmilewski.com	CC BY-SA	https://creativecommons.org/licenses/by-sa/4.0/
+nordstrommath.com	CC BY-SA	https://creativecommons.org/licenses/by-sa/4.0/
+digitalcommons.linfield.edu	CC BY-SA	https://creativecommons.org/licenses/by-sa/4.0/
+en.wikipedia.org	CC BY-SA	https://creativecommons.org/licenses/by-sa/3.0/
+june.kim	CC BY-SA	https://creativecommons.org/licenses/by-sa/4.0/

@@ -1,18 +1,21 @@
 package handler
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kimjune01/pageleft/crawler"
 	"github.com/kimjune01/pageleft/platform"
+	"github.com/ledongthuc/pdf"
 
 	"golang.org/x/net/html"
 )
@@ -89,17 +92,26 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fill in any fields the submitter didn't provide.
-	if sub.Title == "" {
-		sub.Title = crawler.ExtractTitle(result.Doc)
-	}
-	if sub.TextContent == "" {
-		sub.TextContent = crawler.ExtractText(result.Doc)
+	if result.IsPDF {
+		if sub.Title == "" {
+			sub.Title = result.PDFTitle
+		}
+		if sub.TextContent == "" {
+			sub.TextContent = result.PDFText
+		}
+	} else {
+		if sub.Title == "" {
+			sub.Title = crawler.ExtractTitle(result.Doc)
+		}
+		if sub.TextContent == "" {
+			sub.TextContent = crawler.ExtractText(result.Doc)
+		}
+		if len(sub.Links) == 0 {
+			sub.Links = crawler.ExtractLinks(result.Doc, result.FinalURL)
+		}
 	}
 	if sub.ContentHash == "" {
 		sub.ContentHash = result.BodyHash
-	}
-	if len(sub.Links) == 0 {
-		sub.Links = crawler.ExtractLinks(result.Doc, result.FinalURL)
 	}
 
 	h.db.LogContribution("crawl", platform.ContributorHash(r.RemoteAddr))
@@ -120,7 +132,12 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Extract paragraphs and insert as chunks (embeddings come from the work queue).
-	paragraphs := crawler.ExtractParagraphs(result.Doc)
+	var paragraphs []string
+	if result.IsPDF {
+		paragraphs = result.PDFChunks
+	} else {
+		paragraphs = crawler.ExtractParagraphs(result.Doc)
+	}
 	chunks := make([]platform.Chunk, 0, len(paragraphs))
 	for i, text := range paragraphs {
 		chunks = append(chunks, platform.Chunk{
@@ -422,14 +439,26 @@ func (h *Handler) handleContributeCompilable(w http.ResponseWriter, r *http.Requ
 // fetchResult holds the parsed page and license from a verification fetch.
 type fetchResult struct {
 	License  *crawler.LicenseInfo
-	Doc      *html.Node
+	Doc      *html.Node // nil for PDFs
 	FinalURL string
 	BodyHash string
+	// PDF-only fields
+	IsPDF      bool
+	PDFTitle   string
+	PDFText    string
+	PDFChunks  []string
 }
 
 // fetchAndVerify fetches a URL, checks for a copyleft license, and returns
 // the parsed HTML so callers can extract content without a second fetch.
+// License resolution order: blocked domains → copyleft domains → per-page detection.
 func fetchAndVerify(pageURL string) (*fetchResult, error) {
+	// Check domain-level overrides before fetching
+	domainLicense, blocked, reason := crawler.CheckDomain(pageURL)
+	if blocked {
+		return nil, fmt.Errorf("%s", reason)
+	}
+
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Get(pageURL)
 	if err != nil {
@@ -442,30 +471,109 @@ func fetchAndVerify(pageURL string) (*fetchResult, error) {
 	}
 
 	contentType := resp.Header.Get("Content-Type")
-	if !strings.Contains(contentType, "text/html") {
-		return nil, fmt.Errorf("not HTML: %s", contentType)
+	isPDF := strings.Contains(contentType, "application/pdf")
+	isHTML := strings.Contains(contentType, "text/html")
+
+	if !isHTML && !isPDF {
+		return nil, fmt.Errorf("unsupported content type: %s", contentType)
 	}
 
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024)) // 20MB for PDFs
 	if err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 
+	h := fmt.Sprintf("%x", sha256.Sum256(bodyBytes))
+	finalURL := resp.Request.URL.String()
+
+	if isPDF {
+		// PDF: domain license required (can't detect license from PDF markup)
+		if domainLicense == nil {
+			return nil, fmt.Errorf("PDF requires domain-level license verification")
+		}
+
+		text, chunks, title, err := extractPDFContent(bodyBytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse PDF: %w", err)
+		}
+
+		return &fetchResult{
+			License:   domainLicense,
+			FinalURL:  finalURL,
+			BodyHash:  h,
+			IsPDF:     true,
+			PDFTitle:  title,
+			PDFText:   text,
+			PDFChunks: chunks,
+		}, nil
+	}
+
+	// HTML path
 	doc, err := html.Parse(strings.NewReader(string(bodyBytes)))
 	if err != nil {
 		return nil, fmt.Errorf("parse HTML: %w", err)
 	}
 
-	license := crawler.DetectLicense(doc)
+	// Use domain-level license if available, otherwise per-page detection
+	license := domainLicense
+	if license == nil {
+		license = crawler.DetectLicense(doc)
+	}
 	if license == nil {
 		return nil, fmt.Errorf("no copyleft license found")
 	}
 
-	h := fmt.Sprintf("%x", sha256.Sum256(bodyBytes))
 	return &fetchResult{
 		License:  license,
 		Doc:      doc,
-		FinalURL: resp.Request.URL.String(),
+		FinalURL: finalURL,
 		BodyHash: h,
 	}, nil
+}
+
+// extractPDFContent extracts text from PDF bytes, splits into chunks by page.
+func extractPDFContent(data []byte) (fullText string, chunks []string, title string, err error) {
+	tmpFile, err := os.CreateTemp("", "pageleft-*.pdf")
+	if err != nil {
+		return "", nil, "", fmt.Errorf("create temp file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	defer tmpFile.Close()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		return "", nil, "", fmt.Errorf("write temp file: %w", err)
+	}
+	tmpFile.Close()
+
+	f, r, err := pdf.Open(tmpFile.Name())
+	if err != nil {
+		return "", nil, "", fmt.Errorf("open PDF: %w", err)
+	}
+	defer f.Close()
+
+	var buf bytes.Buffer
+	for i := 1; i <= r.NumPage(); i++ {
+		page := r.Page(i)
+		if page.V.IsNull() {
+			continue
+		}
+		text, err := page.GetPlainText(nil)
+		if err != nil {
+			continue
+		}
+		text = strings.TrimSpace(text)
+		if text == "" {
+			continue
+		}
+		if i == 1 {
+			// Use first non-empty line as title
+			lines := strings.SplitN(text, "\n", 2)
+			title = strings.TrimSpace(lines[0])
+		}
+		chunks = append(chunks, text)
+		buf.WriteString(text)
+		buf.WriteString("\n\n")
+	}
+
+	return buf.String(), chunks, title, nil
 }

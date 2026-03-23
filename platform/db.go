@@ -146,6 +146,7 @@ func (db *DB) migrate() error {
 	db.conn.Exec("ALTER TABLE pages ADD COLUMN quality REAL NOT NULL DEFAULT 1.0")
 	db.conn.Exec("ALTER TABLE pages ADD COLUMN compilable INTEGER NOT NULL DEFAULT 0")
 	db.conn.Exec("ALTER TABLE quality_reviews ADD COLUMN contributor TEXT NOT NULL DEFAULT ''")
+
 	return nil
 }
 

@@ -127,8 +127,16 @@ func (c *Crawler) crawlPage(pageURL string, depth int) error {
 	// Resolve final URL (after redirects)
 	finalURL := resp.Request.URL.String()
 
-	// Detect license
-	license := DetectLicense(doc)
+	// Detect license: domain-level first, then per-page
+	domainLicense, blocked, reason := CheckDomain(finalURL)
+	if blocked {
+		log.Printf("  %s: %s", reason, finalURL)
+		return nil
+	}
+	license := domainLicense
+	if license == nil {
+		license = DetectLicense(doc)
+	}
 	if license == nil {
 		log.Printf("  no copyleft license: %s", finalURL)
 		return nil // skip non-copyleft pages

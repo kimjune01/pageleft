@@ -76,6 +76,91 @@ func TestFirst500Words(t *testing.T) {
 	}
 }
 
+func TestCheckDomain(t *testing.T) {
+	tests := []struct {
+		name        string
+		url         string
+		wantLicense bool
+		wantBlocked bool
+		wantType    string
+	}{
+		{
+			"copyleft domain",
+			"https://bartoszmilewski.com/2014/11/04/category-the-essence-of-composition/",
+			true, false, "CC BY-SA",
+		},
+		{
+			"copyleft domain with www",
+			"https://www.bartoszmilewski.com/some/page",
+			true, false, "CC BY-SA",
+		},
+		{
+			"blocked domain medium",
+			"https://medium.com/@someone/some-post-123",
+			false, true, "",
+		},
+		{
+			"blocked domain lesswrong",
+			"https://lesswrong.com/posts/abc/some-post",
+			false, true, "",
+		},
+		{
+			"blocked domain substack subdomain",
+			"https://someone.substack.com/p/some-post",
+			false, true, "",
+		},
+		{
+			"unknown domain falls through",
+			"https://example.com/page",
+			false, false, "",
+		},
+		{
+			"wikipedia copyleft",
+			"https://en.wikipedia.org/wiki/Category_theory",
+			true, false, "CC BY-SA",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			license, blocked, _ := CheckDomain(tt.url)
+			if blocked != tt.wantBlocked {
+				t.Errorf("blocked: got %v, want %v", blocked, tt.wantBlocked)
+			}
+			if tt.wantLicense {
+				if license == nil {
+					t.Fatal("expected license, got nil")
+				}
+				if license.Type != tt.wantType {
+					t.Errorf("type: got %q, want %q", license.Type, tt.wantType)
+				}
+			} else if license != nil && !blocked {
+				t.Errorf("expected nil license, got %+v", license)
+			}
+		})
+	}
+}
+
+func TestExtractDomain(t *testing.T) {
+	tests := []struct {
+		url  string
+		want string
+	}{
+		{"https://bartoszmilewski.com/2014/page", "bartoszmilewski.com"},
+		{"https://www.bartoszmilewski.com/page", "bartoszmilewski.com"},
+		{"https://en.wikipedia.org/wiki/Thing", "en.wikipedia.org"},
+		{"https://medium.com/@user/post", "medium.com"},
+		{"not a url", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			got := ExtractDomain(tt.url)
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDetectLicense(t *testing.T) {
 	tests := []struct {
 		name    string

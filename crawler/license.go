@@ -1,6 +1,7 @@
 package crawler
 
 import (
+	"net/url"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -174,6 +175,17 @@ func findFooterLicense(n *html.Node) *LicenseInfo {
 		}
 	}
 	return nil
+}
+
+// ExtractDomain returns the hostname from a URL, stripping "www." prefix.
+func ExtractDomain(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	host = strings.TrimPrefix(host, "www.")
+	return host
 }
 
 func attr(n *html.Node, key string) string {

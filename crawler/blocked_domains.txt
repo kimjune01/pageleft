@@ -1,0 +1,7 @@
+# Domains where platform ToS overrides author license claims.
+# Pages from these domains are never indexed, regardless of per-page declarations.
+# One domain per line.
+
+medium.com
+lesswrong.com
+substack.com
