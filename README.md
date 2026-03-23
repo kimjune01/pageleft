@@ -43,7 +43,7 @@ Anonymous contributor rankings by hashed fingerprint. Filter by `type` (`review`
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) or read [Why Contribute](https://www.june.kim/why-contribute).
+See [CONTRIBUTING.md](docs/CONTRIBUTING.md) or read [Why Contribute](https://www.june.kim/why-contribute).
 
 ## License
 

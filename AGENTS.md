@@ -25,4 +25,4 @@
 When changing API behavior, endpoints, request/response shapes, or the embedding model, update `README.md` to match. The README is how federated workers and agents discover the API contract.
 
 ## Keep the roadmap current
-After implementing a feature, move it from its current section in `ROADMAP.md` to **Done**. If the work revealed new open problems, add them.
+After implementing a feature, move it from its current section in `docs/ROADMAP.md` to **Done**. If the work revealed new open problems, add them.
