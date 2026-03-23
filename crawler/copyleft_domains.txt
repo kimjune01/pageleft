@@ -1,9 +1,24 @@
 # Domains verified as copyleft at the site/project level.
 # Format: domain <tab> license_type <tab> license_url
 # The license applies to all pages under the domain.
+#
+# COPYLEFT ONLY. No permissive licenses (MIT, Apache, CC BY).
+#
+# Why not permissive? PageLeft enforces non-exclusivity. Copyleft licenses
+# (CC BY-SA, GFDL, GPL, AGPL) require derivatives to stay open. Permissive
+# licenses allow proprietary derivatives — a company can take MIT content,
+# close it, and exclude everyone else. That breaks the Canon thesis: the
+# growing body of work must enforce that nobody can exclude anyone.
+#
+# Permissive sources are build inputs, not Canon. Compile them into CC BY-SA
+# derivatives (breadcrumbs pages), then index the derivatives. The permissive
+# original stays linked as attribution, not indexed as Canon.
+# See: june.kim/canon, june.kim/the-press
 
 bartoszmilewski.com	CC BY-SA	https://creativecommons.org/licenses/by-sa/4.0/
 nordstrommath.com	CC BY-SA	https://creativecommons.org/licenses/by-sa/4.0/
 digitalcommons.linfield.edu	CC BY-SA	https://creativecommons.org/licenses/by-sa/4.0/
+math.dartmouth.edu	GFDL	https://www.gnu.org/licenses/fdl-1.3.html
+abstract.ups.edu	GFDL	https://www.gnu.org/licenses/fdl-1.3.html
 en.wikipedia.org	CC BY-SA	https://creativecommons.org/licenses/by-sa/3.0/
 june.kim	CC BY-SA	https://creativecommons.org/licenses/by-sa/4.0/
