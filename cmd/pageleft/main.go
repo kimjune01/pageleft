@@ -263,7 +263,7 @@ func cmdEmbedBackfill(dbPath string) {
 	rows, err := db.RawQuery(`
 		SELECT p.id, p.url
 		FROM pages p
-		WHERE (p.embedding IS NULL OR p.embedding = '' OR p.embedding = '[]')
+		WHERE (p.embedding IS NULL OR length(p.embedding) <= 5)
 		AND EXISTS (
 			SELECT 1 FROM chunks c
 			WHERE c.page_id = p.id
