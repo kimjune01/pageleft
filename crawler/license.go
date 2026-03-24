@@ -34,6 +34,19 @@ var copyleftPatterns = []struct {
 	{"opensource.org/licenses/MPL", "MPL"},
 }
 
+// public domain URL patterns — nobody can exclude anyone, ever
+var publicDomainPatterns = []struct {
+	substring string
+	name      string
+}{
+	// CC0
+	{"creativecommons.org/publicdomain/zero/", "CC0"},
+	// Public Domain Mark
+	{"creativecommons.org/publicdomain/mark/", "Public Domain"},
+	// Unlicense
+	{"unlicense.org", "Unlicense"},
+}
+
 // DetectLicense extracts license info from an HTML document.
 // Priority: <link rel="license"> -> JSON-LD -> <a rel="license"> -> <meta name="license"> -> footer heuristic
 func DetectLicense(doc *html.Node) *LicenseInfo {
@@ -65,8 +78,27 @@ func isCopyleft(url string) (string, bool) {
 	return "", false
 }
 
+func isPublicDomain(url string) (string, bool) {
+	lower := strings.ToLower(url)
+	for _, p := range publicDomainPatterns {
+		if strings.Contains(lower, strings.ToLower(p.substring)) {
+			return p.name, true
+		}
+	}
+	return "", false
+}
+
+// isNonExclusive returns true for copyleft or public domain licenses.
+// Both guarantee nobody can exclude anyone from using the content.
+func isNonExclusive(url string) (string, bool) {
+	if name, ok := isCopyleft(url); ok {
+		return name, true
+	}
+	return isPublicDomain(url)
+}
+
 func checkURL(url string) *LicenseInfo {
-	name, ok := isCopyleft(url)
+	name, ok := isNonExclusive(url)
 	if !ok {
 		return nil
 	}

@@ -119,6 +119,26 @@ func TestCheckDomain(t *testing.T) {
 			"https://en.wikipedia.org/wiki/Category_theory",
 			true, false, "CC BY-SA",
 		},
+		{
+			"rfc-editor public domain",
+			"https://www.rfc-editor.org/rfc/rfc2616",
+			true, false, "Public Domain",
+		},
+		{
+			"gutenberg public domain",
+			"https://www.gutenberg.org/ebooks/5740",
+			true, false, "Public Domain",
+		},
+		{
+			"nasa public domain",
+			"https://ntrs.nasa.gov/citations/19880069935",
+			true, false, "Public Domain",
+		},
+		{
+			"nist public domain",
+			"https://www.nist.gov/publications/some-report",
+			true, false, "Public Domain",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -187,6 +207,21 @@ func TestDetectLicense(t *testing.T) {
 			"MIT not copyleft",
 			`<html><head><link rel="license" href="https://opensource.org/licenses/MIT"></head></html>`,
 			true, "",
+		},
+		{
+			"CC0 public domain",
+			`<html><head><link rel="license" href="https://creativecommons.org/publicdomain/zero/1.0/"></head></html>`,
+			false, "CC0",
+		},
+		{
+			"public domain mark",
+			`<html><body><a rel="license" href="https://creativecommons.org/publicdomain/mark/1.0/">Public Domain</a></body></html>`,
+			false, "Public Domain",
+		},
+		{
+			"unlicense",
+			`<html><head><link rel="license" href="https://unlicense.org/"></head></html>`,
+			false, "Unlicense",
 		},
 	}
 	for _, tt := range tests {
