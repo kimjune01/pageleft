@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -505,7 +506,29 @@ func (db *DB) SubmitQualityScore(pageID int64, score float64, model string, cont
 	if err != nil {
 		return fmt.Errorf("insert review: %w", err)
 	}
-	_, err = db.conn.Exec(`UPDATE pages SET quality = quality * ? WHERE id = ?`, score, pageID)
+	// Geometric mean: quality = (product of all scores) ^ (1/n)
+	// Recompute from all reviews. N is small (single digits per page).
+	rows, err := db.conn.Query(`SELECT score FROM quality_reviews WHERE page_id = ?`, pageID)
+	if err != nil {
+		return fmt.Errorf("fetch reviews: %w", err)
+	}
+	defer rows.Close()
+
+	product := 1.0
+	n := 0
+	for rows.Next() {
+		var s float64
+		if err := rows.Scan(&s); err != nil {
+			return fmt.Errorf("scan score: %w", err)
+		}
+		product *= s
+		n++
+	}
+	if n == 0 {
+		return nil
+	}
+	geoMean := math.Pow(product, 1.0/float64(n))
+	_, err = db.conn.Exec(`UPDATE pages SET quality = ? WHERE id = ?`, geoMean, pageID)
 	return err
 }
 
