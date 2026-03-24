@@ -229,6 +229,38 @@ func (db *DB) UpdateEmbedding(id int64, emb []float64) error {
 	return err
 }
 
+// RawQuery exposes db.conn.Query for ad-hoc queries (backfill commands).
+func (db *DB) RawQuery(query string, args ...any) (*sql.Rows, error) {
+	return db.conn.Query(query, args...)
+}
+
+// ChunkEmbeddingsForPage returns all non-null chunk embeddings for a page.
+func (db *DB) ChunkEmbeddingsForPage(pageID int64) ([][]float64, error) {
+	rows, err := db.conn.Query(`
+		SELECT embedding FROM chunks
+		WHERE page_id = ? AND embedding IS NOT NULL AND length(embedding) > 5`, pageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var embeddings [][]float64
+	for rows.Next() {
+		var embJSON string
+		if err := rows.Scan(&embJSON); err != nil {
+			return nil, err
+		}
+		var emb []float64
+		if err := json.Unmarshal([]byte(embJSON), &emb); err != nil {
+			continue
+		}
+		if len(emb) > 0 {
+			embeddings = append(embeddings, emb)
+		}
+	}
+	return embeddings, nil
+}
+
 func (db *DB) PageCount() (int, error) {
 	var n int
 	err := db.conn.QueryRow("SELECT COUNT(*) FROM pages").Scan(&n)

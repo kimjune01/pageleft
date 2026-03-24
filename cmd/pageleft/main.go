@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -20,7 +21,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: pageleft <crawl|reindex|serve|chunk-backfill|link-backfill>\n")
+		fmt.Fprintf(os.Stderr, "usage: pageleft <crawl|reindex|serve|chunk-backfill|link-backfill|embed-backfill>\n")
 		os.Exit(1)
 	}
 
@@ -37,6 +38,8 @@ func main() {
 		cmdChunkBackfill(dbPath)
 	case "link-backfill":
 		cmdLinkBackfill(dbPath)
+	case "embed-backfill":
+		cmdEmbedBackfill(dbPath)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
@@ -247,6 +250,93 @@ func cmdLinkBackfill(dbPath string) {
 		log.Fatalf("pagerank: %v", err)
 	}
 	log.Println("done")
+}
+
+func cmdEmbedBackfill(dbPath string) {
+	db, err := platform.NewDB(dbPath)
+	if err != nil {
+		log.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	// Find pages without embeddings that have chunks with embeddings.
+	rows, err := db.RawQuery(`
+		SELECT p.id, p.url
+		FROM pages p
+		WHERE (p.embedding IS NULL OR p.embedding = '' OR p.embedding = '[]')
+		AND EXISTS (
+			SELECT 1 FROM chunks c
+			WHERE c.page_id = p.id
+			AND c.embedding IS NOT NULL AND length(c.embedding) > 5
+		)`)
+	if err != nil {
+		log.Fatalf("query pages: %v", err)
+	}
+
+	type pageRef struct {
+		id  int64
+		url string
+	}
+	var pages []pageRef
+	for rows.Next() {
+		var p pageRef
+		if err := rows.Scan(&p.id, &p.url); err != nil {
+			log.Fatalf("scan: %v", err)
+		}
+		pages = append(pages, p)
+	}
+	rows.Close()
+
+	log.Printf("found %d pages needing page-level embeddings", len(pages))
+
+	updated := 0
+	for _, p := range pages {
+		chunks, err := db.ChunkEmbeddingsForPage(p.id)
+		if err != nil || len(chunks) == 0 {
+			continue
+		}
+
+		// Average chunk embeddings
+		dim := len(chunks[0])
+		avg := make([]float64, dim)
+		for _, emb := range chunks {
+			for i, v := range emb {
+				avg[i] += v
+			}
+		}
+		n := float64(len(chunks))
+		// Normalize: average then L2-normalize
+		var norm float64
+		for i := range avg {
+			avg[i] /= n
+			norm += avg[i] * avg[i]
+		}
+		if norm > 0 {
+			norm = 1.0 / (norm * 0.5) // sqrt via newton? just use math
+		}
+		// Actually use math.Sqrt
+		normSqrt := 0.0
+		for _, v := range avg {
+			normSqrt += v * v
+		}
+		if normSqrt > 0 {
+			scale := 1.0 / math.Sqrt(normSqrt)
+			for i := range avg {
+				avg[i] *= scale
+			}
+		}
+
+		if err := db.UpdateEmbedding(p.id, avg); err != nil {
+			log.Printf("update %s: %v", p.url, err)
+			continue
+		}
+		updated++
+		if updated%50 == 0 {
+			log.Printf("  %d page embeddings backfilled", updated)
+		}
+	}
+
+	log.Printf("embed-backfill complete: %d pages updated", updated)
 }
 
 func envOr(key, fallback string) string {
