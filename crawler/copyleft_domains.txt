@@ -33,3 +33,5 @@ rfc-editor.org	Public Domain	https://trustee.ietf.org/about/faq/#rights-in-rfcs
 gutenberg.org	Public Domain	https://www.gutenberg.org/policy/license.html
 ntrs.nasa.gov	Public Domain	https://www.nasa.gov/multimedia/guidelines/index.html
 nist.gov	Public Domain	https://www.nist.gov/open/copyright-fair-use-and-licensing-statements-srd-data-software-and-technical-series-publications
+uscode.house.gov	Public Domain	https://uscode.house.gov/about/notice.xhtml
+ecfr.gov	Public Domain	https://www.ecfr.gov/reader-aids/using-ecfr/disclaimer
