@@ -2,7 +2,9 @@ package handler
 
 import (
 	"fmt"
+	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/kimjune01/pageleft/crawler"
@@ -14,15 +16,55 @@ type Handler struct {
 	embedder *platform.Embedder
 	robots   *crawler.RobotsChecker
 	version  string
+
+	// Chunk cache: loaded once, invalidated when embeddings change.
+	chunkMu    sync.RWMutex
+	chunkCache []platform.ChunkWithPage
+	chunkDirty bool
 }
 
 func New(db *platform.DB, embedder *platform.Embedder, version string) *Handler {
-	return &Handler{
-		db:       db,
-		embedder: embedder,
-		robots:   crawler.NewRobotsChecker(&http.Client{Timeout: 10 * time.Second}),
-		version:  version,
+	h := &Handler{
+		db:         db,
+		embedder:   embedder,
+		robots:     crawler.NewRobotsChecker(&http.Client{Timeout: 10 * time.Second}),
+		version:    version,
+		chunkDirty: true, // load on first search
 	}
+	return h
+}
+
+// cachedChunks returns the chunk cache, reloading from DB if dirty.
+func (h *Handler) cachedChunks() []platform.ChunkWithPage {
+	h.chunkMu.RLock()
+	if !h.chunkDirty {
+		defer h.chunkMu.RUnlock()
+		return h.chunkCache
+	}
+	h.chunkMu.RUnlock()
+
+	h.chunkMu.Lock()
+	defer h.chunkMu.Unlock()
+	// Double-check after acquiring write lock
+	if !h.chunkDirty {
+		return h.chunkCache
+	}
+	chunks, err := h.db.AllChunksWithPages()
+	if err != nil {
+		log.Printf("chunk cache reload failed: %v", err)
+		return h.chunkCache // return stale
+	}
+	h.chunkCache = chunks
+	h.chunkDirty = false
+	log.Printf("chunk cache loaded: %d chunks", len(chunks))
+	return h.chunkCache
+}
+
+// invalidateChunkCache marks the cache dirty so the next search reloads.
+func (h *Handler) invalidateChunkCache() {
+	h.chunkMu.Lock()
+	h.chunkDirty = true
+	h.chunkMu.Unlock()
 }
 
 func (h *Handler) Mux() http.Handler {

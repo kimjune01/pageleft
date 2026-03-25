@@ -309,6 +309,8 @@ func (h *Handler) handleContributeEmbedding(w http.ResponseWriter, r *http.Reque
 	}
 
 	h.db.LogContribution("embed", platform.ContributorHash(r.RemoteAddr))
+	resp := map[string]any{"accepted": true}
+
 	if sub.ChunkID != 0 {
 		if err := h.db.UpdateChunkEmbedding(sub.ChunkID, sub.Embedding); err != nil {
 			http.Error(w, `{"error":"update chunk failed"}`, http.StatusInternalServerError)
@@ -318,6 +320,11 @@ func (h *Handler) handleContributeEmbedding(w http.ResponseWriter, r *http.Reque
 		if pageID, err := h.db.PageIDForChunk(sub.ChunkID); err == nil {
 			if allDone, err := h.db.AllChunksEmbedded(pageID); err == nil && allDone {
 				h.computePageEmbedding(pageID)
+				h.invalidateChunkCache()
+				resp["page_complete"] = true
+				resp["next"] = map[string]string{
+					"quality": fmt.Sprintf("POST /api/contribute/quality {\"page_id\":%d, \"score\":0.0-1.0, \"model\":\"your-model\"}", pageID),
+				}
 			}
 		}
 	} else if sub.PageID != 0 {
@@ -325,13 +332,14 @@ func (h *Handler) handleContributeEmbedding(w http.ResponseWriter, r *http.Reque
 			http.Error(w, `{"error":"update page failed"}`, http.StatusInternalServerError)
 			return
 		}
+		h.invalidateChunkCache()
 	} else {
 		http.Error(w, `{"error":"chunk_id or page_id is required"}`, http.StatusBadRequest)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"accepted": true})
+	json.NewEncoder(w).Encode(resp)
 }
 
 // computePageEmbedding averages chunk embeddings into a page-level embedding.

@@ -67,11 +67,11 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	_, compilableOnly := r.URL.Query()["compiles"]
 
-	// Try chunk-level search first, fall back to page-level
+	// Chunk-level search from cache, fall back to page-level
 	var results []search.Result
 
-	chunks, chunkErr := h.db.AllChunksWithPages()
-	if chunkErr == nil && len(chunks) > 0 {
+	chunks := h.cachedChunks()
+	if len(chunks) > 0 {
 		pageCount, _ := h.db.PageCount()
 		results = search.SearchChunks(chunks, queryEmb, pageCount, limit)
 	}
