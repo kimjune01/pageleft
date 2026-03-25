@@ -30,8 +30,8 @@ type DB struct {
 }
 
 const (
-	urlBloomM = 14_400_000 // bits — optimal for 1M URLs at 0.1% FPR
-	urlBloomK = 10         // hash functions
+	urlBloomM = 19_200_000 // bits — optimal for 1M items at 0.01% FPR (~2.4 MB)
+	urlBloomK = 13         // hash functions
 )
 
 // urlBloomFilter is a persistent probabilistic set for URL dedup.
@@ -42,8 +42,10 @@ type urlBloomFilter struct {
 }
 
 func newURLBloomFilter() *urlBloomFilter {
-	return &urlBloomFilter{bits: make([]uint64, (urlBloomM+63)/64)}
+	return &urlBloomFilter{bits: make([]uint64, urlBloomWords)}
 }
+
+const urlBloomWords = (urlBloomM + 63) / 64
 
 func (bf *urlBloomFilter) add(item string) {
 	h1, h2 := urlBloomHashes(item)
@@ -79,7 +81,7 @@ func urlBloomHashes(s string) (uint64, uint64) {
 
 func loadURLBloom(path string) *urlBloomFilter {
 	data, err := os.ReadFile(path)
-	if err == nil && len(data) == (urlBloomM+63)/64*8 {
+	if err == nil && len(data) == urlBloomWords*8 {
 		bf := newURLBloomFilter()
 		for i := range bf.bits {
 			bf.bits[i] = binary.LittleEndian.Uint64(data[i*8:])
