@@ -306,10 +306,22 @@ func (db *DB) LinkCount() (int, error) {
 
 // --- Frontier ---
 
-func (db *DB) AddToFrontier(url string, depth int) error {
+// AddToFrontier adds a URL to the crawl frontier if it passes basic filters:
+// not already indexed, not a non-content URL (fragments, mailto, javascript).
+// Domain-level filtering (blocked domains, wiki depth) is the caller's job.
+func (db *DB) AddToFrontier(rawURL string, depth int) error {
+	// Skip non-HTTP, fragments, and obviously non-content URLs
+	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
+		return nil
+	}
+	// Skip already-indexed pages
+	existing, _ := db.GetPageByURL(rawURL)
+	if existing != nil {
+		return nil
+	}
 	_, err := db.conn.Exec(`
 		INSERT INTO frontier (url, depth) VALUES (?, ?)
-		ON CONFLICT(url) DO NOTHING`, url, depth)
+		ON CONFLICT(url) DO NOTHING`, rawURL, depth)
 	return err
 }
 
@@ -342,6 +354,41 @@ func (db *DB) FrontierSize() (int, error) {
 	var n int
 	err := db.conn.QueryRow("SELECT COUNT(*) FROM frontier").Scan(&n)
 	return n, err
+}
+
+// PruneFrontier removes frontier entries that are already indexed,
+// from blocked domains, or are wiki links (handled by depth-1 policy).
+// Returns the number of entries removed.
+func (db *DB) PruneFrontier() (int64, error) {
+	// Delete already-indexed
+	r1, _ := db.conn.Exec(`DELETE FROM frontier WHERE url IN (SELECT url FROM pages)`)
+	n1, _ := r1.RowsAffected()
+
+	// Delete non-HTTP
+	r2, _ := db.conn.Exec(`DELETE FROM frontier WHERE url NOT LIKE 'http://%' AND url NOT LIKE 'https://%'`)
+	n2, _ := r2.RowsAffected()
+
+	// Delete blocked domains — need to do this in Go since SQLite doesn't have easy domain extraction
+	rows, err := db.conn.Query("SELECT id, url FROM frontier")
+	if err != nil {
+		return n1 + n2, err
+	}
+	var toDelete []int64
+	for rows.Next() {
+		var id int64
+		var u string
+		rows.Scan(&id, &u)
+		if isNonContentURL(u) || isWikimediaURL(u) {
+			toDelete = append(toDelete, id)
+		}
+	}
+	rows.Close()
+
+	for _, id := range toDelete {
+		db.conn.Exec("DELETE FROM frontier WHERE id = ?", id)
+	}
+
+	return n1 + n2 + int64(len(toDelete)), nil
 }
 
 // PeekFrontier returns frontier entries without removing them.
@@ -379,13 +426,60 @@ func (db *DB) InsertPageWithLinks(p *Page, links []string) (int64, error) {
 		if target != nil {
 			db.InsertLink(pageID, target.ID, "")
 		}
-		// Only add to frontier if not wiki→wiki (prevents unbounded depth).
-		if !(sourceIsWiki && isWikimediaURL(targetURL)) {
-			db.AddToFrontier(targetURL, 0)
+		// Skip frontier for: wiki→wiki, non-content domains
+		if sourceIsWiki && isWikimediaURL(targetURL) {
+			continue
 		}
+		if isNonContentURL(targetURL) {
+			continue
+		}
+		db.AddToFrontier(targetURL, 0)
 	}
 
 	return pageID, nil
+}
+
+// Domains that never contain indexable copyleft content.
+// Includes platforms (ToS overrides), paywalls, social media, and link shorteners.
+var frontierBlockedDomains = map[string]bool{
+	// Social / platforms
+	"amazon.com": true, "youtube.com": true, "github.com": true,
+	"twitter.com": true, "x.com": true, "facebook.com": true,
+	"reddit.com": true, "linkedin.com": true, "instagram.com": true,
+	"medium.com": true, "substack.com": true, "lesswrong.com": true,
+	"news.ycombinator.com": true,
+	// Paywalls / all-rights-reserved
+	"nytimes.com": true, "wsj.com": true, "economist.com": true,
+	"nature.com": true, "sciencedirect.com": true, "springer.com": true,
+	"wiley.com": true, "jstor.org": true, "acm.org": true, "ieee.org": true,
+	// Link indirection / not content
+	"doi.org": true, "dx.doi.org": true, "archive.org": true,
+	"web.archive.org": true, "google.com": true, "t.co": true,
+	"bit.ly": true, "tinyurl.com": true,
+	// Misc noise discovered in frontier
+	"ncbi.nlm.nih.gov": true, "predictionbook.com": true,
+	"uptontea.com": true,
+}
+
+func isNonContentURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return true
+	}
+	h := strings.ToLower(u.Hostname())
+	if strings.HasPrefix(h, "www.") {
+		h = h[4:]
+	}
+	if frontierBlockedDomains[h] {
+		return true
+	}
+	// Check parent domains (e.g., ncbi.nlm.nih.gov matches nih.gov)
+	for d := range frontierBlockedDomains {
+		if strings.HasSuffix(h, "."+d) {
+			return true
+		}
+	}
+	return false
 }
 
 func isWikimediaURL(rawURL string) bool {

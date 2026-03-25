@@ -47,6 +47,8 @@ func main() {
 		cmdLinkBackfill(dbPath)
 	case "embed-backfill":
 		cmdEmbedBackfill(dbPath)
+	case "prune-frontier":
+		cmdPruneFrontier(dbPath)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
@@ -344,6 +346,25 @@ func cmdEmbedBackfill(dbPath string) {
 	}
 
 	log.Printf("embed-backfill complete: %d pages updated", updated)
+}
+
+func cmdPruneFrontier(dbPath string) {
+	db, err := platform.NewDB(dbPath)
+	if err != nil {
+		log.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	before, _ := db.FrontierSize()
+	log.Printf("frontier before: %d entries", before)
+
+	removed, err := db.PruneFrontier()
+	if err != nil {
+		log.Fatalf("prune: %v", err)
+	}
+
+	after, _ := db.FrontierSize()
+	log.Printf("pruned %d entries, frontier after: %d", removed, after)
 }
 
 func envOr(key, fallback string) string {
