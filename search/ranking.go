@@ -2,10 +2,16 @@ package search
 
 import (
 	"math"
+	"net/url"
 	"sort"
 
 	"github.com/kimjune01/pageleft/platform"
 )
+
+// sourcePenalty is added to embedding similarity when two candidates share a domain.
+// This makes same-source results look more redundant to DPP, spreading selections
+// across sources even when their embeddings differ.
+const sourcePenalty = 0.3
 
 const overfetchMultiplier = 5
 
@@ -136,9 +142,13 @@ func SearchChunks(chunks []platform.ChunkWithPage, queryEmb []float64, totalPage
 }
 
 // dppRerank selects a diverse subset using greedy DPP in embedding space.
-// At each step, picks the candidate that maximizes: relevance * (1 - maxSim).
-// Pages adjacent to selected results but not redundant score highest —
-// this surfaces original ideas near existing ones, not distant noise.
+// At each step, picks the candidate that maximizes:
+//   relevance * (relevanceFloor + (1 - relevanceFloor) * (1 - maxSim))
+// The floor prevents diversity from zeroing out a highly relevant result.
+// With floor=0.5, even a near-duplicate of an existing selection keeps
+// half its relevance score — so it ranks above irrelevant but diverse noise.
+const relevanceFloor = 0.7
+
 func dppRerank(candidates []Result, k int) []Result {
 	if len(candidates) <= k || k <= 0 {
 		return candidates
@@ -170,16 +180,22 @@ func dppRerank(candidates []Result, k int) []Result {
 				continue
 			}
 
-			// Marginal gain: relevance score * (1 - max similarity to already selected)
+			// Marginal gain: relevance * diversity across both embedding and source.
 			maxSim := 0.0
 			for _, j := range selected {
 				sim := CosineSim(candidates[i].embedding, candidates[j].embedding)
+				if sameSource(candidates[i].Page.URL, candidates[j].Page.URL) {
+					sim = math.Min(1.0, sim+sourcePenalty)
+				}
 				if sim > maxSim {
 					maxSim = sim
 				}
 			}
-			diversity := 1.0 - maxSim
-			gain := candidates[i].FinalScore * diversity
+			diversity := relevanceFloor + (1.0-relevanceFloor)*(1.0-maxSim)
+			// Use semantic similarity for DPP gain, not FinalScore.
+			// FinalScore (which includes PageRank) determines the overfetch pool;
+			// DPP selects within it based on what the query actually asked for.
+			gain := candidates[i].Similarity * diversity
 
 			if gain > bestGain {
 				bestGain = gain
@@ -199,4 +215,23 @@ func dppRerank(candidates []Result, k int) []Result {
 		results[i] = candidates[idx]
 	}
 	return results
+}
+
+func sameSource(a, b string) bool {
+	da := extractDomain(a)
+	db := extractDomain(b)
+	return da != "" && da == db
+}
+
+func extractDomain(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	h := u.Hostname()
+	// Normalize: strip www. prefix so www.june.kim == june.kim
+	if len(h) > 4 && h[:4] == "www." {
+		h = h[4:]
+	}
+	return h
 }

@@ -39,6 +39,12 @@ func NewEmbedder() *Embedder {
 	}
 }
 
+// EmbedQuery prepends the BGE instruction prefix for retrieval queries.
+// Documents should use Embed() without the prefix.
+func (e *Embedder) EmbedQuery(text string) ([]float64, error) {
+	return e.Embed("Represent this sentence for searching relevant passages: " + text)
+}
+
 func (e *Embedder) Embed(text string) ([]float64, error) {
 	body, err := json.Marshal(map[string]string{"inputs": text})
 	if err != nil {

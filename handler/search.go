@@ -58,8 +58,8 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Embed query
-	queryEmb, err := h.embedder.Embed(q)
+	// Embed query with BGE instruction prefix for retrieval
+	queryEmb, err := h.embedder.EmbedQuery(q)
 	if err != nil {
 		http.Error(w, `{"error":"embedding failed"}`, http.StatusInternalServerError)
 		return

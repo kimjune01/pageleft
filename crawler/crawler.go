@@ -357,7 +357,9 @@ var blockTags = map[string]bool{
 
 // ExtractParagraphs walks the HTML DOM and splits text on block elements.
 // Scopes to <article> or <main> when present to avoid sidebar/nav noise.
-// Returns up to 30 chunks, each at least 20 characters.
+// Returns up to 30 chunks, each at least 50 characters.
+// The 50-char floor filters navigation fragments (category links, infobox labels)
+// that Wikipedia and similar sites emit as short <li> or <p> elements.
 func ExtractParagraphs(n *html.Node) []string {
 	// Narrow scope to article or main if present
 	root := findContentRoot(n)
@@ -370,7 +372,7 @@ func ExtractParagraphs(n *html.Node) []string {
 		}
 		if n.Type == html.ElementNode && blockTags[n.Data] {
 			text := strings.TrimSpace(textContent(n))
-			if len(text) >= 20 {
+			if len(text) >= 50 {
 				paragraphs = append(paragraphs, text)
 			}
 			return // don't recurse into children, textContent already got them
