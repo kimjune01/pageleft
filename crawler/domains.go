@@ -134,6 +134,8 @@ func loadDomainList(filename string) map[string]bool {
 }
 
 // IsFrontierBlocked returns true if the URL's domain should not enter the frontier.
+// Bloom filters check exact domain; matchDomain catches subdomains
+// (e.g., m.facebook.com matching facebook.com in the text file).
 func IsFrontierBlocked(rawURL string) bool {
 	domain := ExtractDomain(rawURL)
 	if domain == "" {
