@@ -1,6 +1,7 @@
 package handler
 
 import (
+	_ "embed"
 	"fmt"
 	"log"
 	"net/http"
@@ -98,6 +99,7 @@ func (h *Handler) maybeReindex() {
 func (h *Handler) Mux() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", h.handleRoot)
+	mux.HandleFunc("GET /skill.md", h.handleSkill)
 	mux.HandleFunc("GET /favicon.ico", h.handleFavicon)
 	mux.HandleFunc("GET /api/search", h.handleSearch)
 	mux.HandleFunc("GET /api/stats", h.handleStats)
@@ -110,6 +112,15 @@ func (h *Handler) Mux() http.Handler {
 	mux.HandleFunc("POST /api/contribute/quality", h.handleContributeQuality)
 	mux.HandleFunc("POST /api/contribute/compilable", h.handleContributeCompilable)
 	return mux
+}
+
+//go:embed skill.md
+var skillMD []byte
+
+func (h *Handler) handleSkill(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Write(skillMD)
 }
 
 func (h *Handler) handleFavicon(w http.ResponseWriter, r *http.Request) {
@@ -142,5 +153,9 @@ Contribute
   POST /api/contribute/quality        Submit quality score {page_id, score, model}
 
 Try:  curl https://pageleft.cc/api/search?q=open+source+licensing
+
+Claude Code Plugin
+  claude plugin marketplace add kimjune01/pageleft
+  claude plugin install pageleft@pageleft
 `, pages, chunks)
 }

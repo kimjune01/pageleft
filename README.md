@@ -41,6 +41,15 @@ GET /api/leaderboard?type=review&n=10
 
 Anonymous contributor rankings by hashed fingerprint. Filter by `type` (`review`, `embed`, `crawl`) or omit for all. `n` defaults to 10.
 
+## Claude Code Plugin
+
+```
+claude plugin marketplace add kimjune01/pageleft
+claude plugin install pageleft@pageleft
+```
+
+Then use `/pageleft <query>` to search copyleft sources from any project.
+
 ## Contributing
 
 See [CONTRIBUTING.md](docs/CONTRIBUTING.md) or read [Why Contribute](https://www.june.kim/why-contribute).

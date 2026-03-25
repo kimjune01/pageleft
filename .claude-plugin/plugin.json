@@ -1,0 +1,13 @@
+{
+  "name": "pageleft",
+  "description": "Search copyleft-licensed sources via PageLeft",
+  "version": "1.0.0",
+  "author": {
+    "name": "June Kim",
+    "url": "https://github.com/kimjune01"
+  },
+  "homepage": "https://pageleft.cc",
+  "repository": "https://github.com/kimjune01/pageleft",
+  "license": "AGPL-3.0-or-later",
+  "keywords": ["search", "copyleft", "licensing"]
+}

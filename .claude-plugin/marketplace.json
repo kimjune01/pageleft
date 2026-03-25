@@ -1,0 +1,21 @@
+{
+  "name": "pageleft",
+  "owner": {
+    "name": "June Kim"
+  },
+  "metadata": {
+    "description": "Search copyleft-licensed sources from your coding agent",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "pageleft",
+      "source": {
+        "source": "github",
+        "repo": "kimjune01/pageleft"
+      },
+      "description": "Search copyleft-licensed sources via PageLeft",
+      "version": "1.0.0"
+    }
+  ]
+}
