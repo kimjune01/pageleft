@@ -23,8 +23,9 @@ amazon.com
 goodreads.com
 uptontea.com
 
-# Code hosting (not prose content)
-github.com
+# Code hosting (gitlab/bitbucket still blocked — no license API integration yet)
+# github.com — unblocked: forge indexing checks license API, fetches README only
+# codeberg.org — never blocked: copyleft-friendly forge
 gitlab.com
 bitbucket.org
 

@@ -9,7 +9,7 @@ import (
 	"log"
 	"math"
 	"net/http"
-	"net/url"
+
 	"os"
 	"strconv"
 	"strings"
@@ -133,7 +133,7 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 		CrawledAt:   time.Now(),
 	}
 
-	pageID, err := h.db.InsertPageWithLinks(page, sub.Links, crawler.IsFrontierBlocked)
+	pageID, err := h.db.InsertPageWithLinks(page, sub.Links, crawler.ShouldBlockFrontier)
 	if err != nil {
 		http.Error(w, `{"error":"insert failed"}`, http.StatusInternalServerError)
 		return
@@ -499,21 +499,25 @@ type fetchResult struct {
 	PDFChunks  []string
 }
 
-// fetchAndVerify fetches a URL, checks for a copyleft license, and returns
-// the parsed HTML so callers can extract content without a second fetch.
-// License resolution order: blocked domains → copyleft domains → per-page detection.
+// fetchAndVerify runs the filter chain (crawler.Resolve), fetches the URL,
+// and returns parsed content with a verified license.
 func fetchAndVerify(pageURL string) (*fetchResult, error) {
-	// Check domain-level overrides before fetching
-	domainLicense, blocked, reason := crawler.CheckDomain(pageURL)
-	if blocked {
-		return nil, fmt.Errorf("%s", reason)
+	res := crawler.Resolve(pageURL)
+	if res.Action != crawler.Allow {
+		return nil, fmt.Errorf("%s", res.Reason)
 	}
 
-	// Wikimedia sites block bot UAs on the web frontend. Use the REST API instead.
+	// Forge URLs: Resolve already checked license and rewrote to raw README.
+	// Fetch the README as markdown, wrap in HTML for the paragraph extractor.
+	if res.FetchURL != "" && strings.Contains(res.FetchURL, "raw.githubusercontent.com") ||
+		res.FetchURL != "" && strings.Contains(res.FetchURL, "codeberg.org") && strings.Contains(res.FetchURL, "/raw/") {
+		return fetchForgeReadme(pageURL, res)
+	}
+
+	// Standard fetch (HTML or PDF)
 	fetchURL := pageURL
-	if title, ok := wikipediaTitle(pageURL); ok {
-		u, _ := url.Parse(pageURL)
-		fetchURL = fmt.Sprintf("https://%s/api/rest_v1/page/html/%s", u.Host, title)
+	if res.FetchURL != "" {
+		fetchURL = res.FetchURL
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -540,7 +544,7 @@ func fetchAndVerify(pageURL string) (*fetchResult, error) {
 		return nil, fmt.Errorf("unsupported content type: %s", contentType)
 	}
 
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024)) // 20MB for PDFs
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024))
 	if err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
 	}
@@ -549,24 +553,16 @@ func fetchAndVerify(pageURL string) (*fetchResult, error) {
 	finalURL := resp.Request.URL.String()
 
 	if isPDF {
-		// PDF: domain license required (can't detect license from PDF markup)
-		if domainLicense == nil {
+		if res.License == nil {
 			return nil, fmt.Errorf("PDF requires domain-level license verification")
 		}
-
 		text, chunks, title, err := extractPDFContent(bodyBytes)
 		if err != nil {
 			return nil, fmt.Errorf("parse PDF: %w", err)
 		}
-
 		return &fetchResult{
-			License:   domainLicense,
-			FinalURL:  finalURL,
-			BodyHash:  h,
-			IsPDF:     true,
-			PDFTitle:  title,
-			PDFText:   text,
-			PDFChunks: chunks,
+			License: res.License, FinalURL: finalURL, BodyHash: h,
+			IsPDF: true, PDFTitle: title, PDFText: text, PDFChunks: chunks,
 		}, nil
 	}
 
@@ -576,8 +572,7 @@ func fetchAndVerify(pageURL string) (*fetchResult, error) {
 		return nil, fmt.Errorf("parse HTML: %w", err)
 	}
 
-	// Use domain-level license if available, otherwise per-page detection
-	license := domainLicense
+	license := res.License
 	if license == nil {
 		license = crawler.DetectLicense(doc)
 	}
@@ -585,36 +580,46 @@ func fetchAndVerify(pageURL string) (*fetchResult, error) {
 		return nil, fmt.Errorf("no copyleft license found")
 	}
 
-	return &fetchResult{
-		License:  license,
-		Doc:      doc,
-		FinalURL: finalURL,
-		BodyHash: h,
-	}, nil
+	return &fetchResult{License: license, Doc: doc, FinalURL: finalURL, BodyHash: h}, nil
 }
 
-// wikipediaTitle extracts the article title from a Wikipedia/Wikimedia URL.
-// Returns the title and true if the URL is a wiki article page.
-func wikipediaTitle(rawURL string) (string, bool) {
-	u, err := url.Parse(rawURL)
+// fetchForgeReadme fetches a raw README from a forge and wraps it in HTML.
+func fetchForgeReadme(pageURL string, res crawler.Resolution) (*fetchResult, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, _ := http.NewRequest("GET", res.FetchURL, nil)
+	req.Header.Set("User-Agent", crawler.RobotsUserAgent)
+	resp, err := client.Do(req)
 	if err != nil {
-		return "", false
+		return nil, fmt.Errorf("fetch README: %w", err)
 	}
-	host := strings.ToLower(u.Hostname())
-	isWikimedia := host == "en.wikipedia.org" ||
-		host == "en.wikibooks.org" ||
-		host == "en.wikisource.org"
-	if !isWikimedia {
-		return "", false
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("README not found: status %d", resp.StatusCode)
 	}
-	if !strings.HasPrefix(u.Path, "/wiki/") {
-		return "", false
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
+	if err != nil {
+		return nil, fmt.Errorf("read README: %w", err)
 	}
-	title := strings.TrimPrefix(u.Path, "/wiki/")
-	if title == "" {
-		return "", false
+
+	h := fmt.Sprintf("%x", sha256.Sum256(body))
+
+	// Wrap markdown lines in <p> tags for the paragraph extractor
+	htmlStr := "<html><body><article>"
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		htmlStr += "<p>" + line + "</p>\n"
 	}
-	return title, true
+	htmlStr += "</article></body></html>"
+
+	doc, err := html.Parse(strings.NewReader(htmlStr))
+	if err != nil {
+		return nil, fmt.Errorf("parse README: %w", err)
+	}
+
+	return &fetchResult{License: res.License, Doc: doc, FinalURL: pageURL, BodyHash: h}, nil
 }
 
 // extractPDFContent extracts text from PDF bytes, splits into chunks by page.

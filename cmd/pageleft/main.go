@@ -365,7 +365,7 @@ func cmdPruneFrontier(dbPath string) {
 	before, _ := db.FrontierSize()
 	log.Printf("frontier before: %d entries", before)
 
-	removed, err := db.PruneFrontier(crawler.IsFrontierBlocked)
+	removed, err := db.PruneFrontier(crawler.ShouldBlockFrontier)
 	if err != nil {
 		log.Fatalf("prune: %v", err)
 	}

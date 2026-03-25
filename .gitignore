@@ -7,3 +7,4 @@ sidecar/.venv/
 .env
 /pageleft
 infra/infra
+nonpermissive.bloom
