@@ -57,11 +57,14 @@ func Search(pages []*platform.Page, queryEmb []float64, limit int) []Result {
 		})
 	}
 
+	// Sort by semantic similarity for pool admission.
+	// PageRank/quality live in FinalScore for DPP tie-breaking,
+	// but don't gate pool entry — high-relevance, low-PageRank
+	// pages must be DPP candidates.
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].FinalScore > results[j].FinalScore
+		return results[i].Similarity > results[j].Similarity
 	})
 
-	// Overfetch, then DPP rerank for diversity
 	pool := limit * overfetchMultiplier
 	if pool > 0 && len(results) > pool {
 		results = results[:pool]
@@ -127,11 +130,14 @@ func SearchChunks(chunks []platform.ChunkWithPage, queryEmb []float64, totalPage
 		})
 	}
 
+	// Sort by semantic similarity for pool admission.
+	// PageRank/quality live in FinalScore for DPP tie-breaking,
+	// but don't gate pool entry — high-relevance, low-PageRank
+	// pages must be DPP candidates.
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].FinalScore > results[j].FinalScore
+		return results[i].Similarity > results[j].Similarity
 	})
 
-	// Overfetch, then DPP rerank for diversity
 	pool := limit * overfetchMultiplier
 	if pool > 0 && len(results) > pool {
 		results = results[:pool]
