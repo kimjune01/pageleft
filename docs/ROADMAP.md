@@ -56,8 +56,9 @@ Crawl and embed run on federated workers — PageLeft serves the work queue and 
 - Federated work queues, robots.txt, license detection via `<meta>`, `dc.rights`, and copyleft domain allowlist
 - Wikipedia/Wikimedia fetched via REST API. Wiki→wiki excluded from frontier (depth-1 policy)
 - Unified filter chain: `crawler.Resolve(url)` runs protocol → blocked domain → Bloom filter → forge → Wikipedia → copyleft domain → allow. One function, one decision. Returns `{Action, License, FetchURL, Reason}`.
-- Persistent Bloom filter (`nonpermissive.bloom`): learns domains that are neither copyleft nor public domain. Seeded from block lists, grows at runtime when pages fail license verification. 10K capacity, 0.1% FPR, ~18KB.
-- GitHub/Codeberg forge indexing: detect `/{owner}/{repo}`, check license via API (SPDX match) with LICENSE file keyword fallback for NOASSERTION repos. Fetches raw README only.
+- Persistent Bloom filter (`nonpermissive.bloom`): learns domains that are neither copyleft nor public domain. 5M capacity (8.6MB), 0.1% FPR. Seeded from `frontier_blocked_domains.txt` + UT1 blacklists (adult, malware, phishing, gambling, shopping, social, ads, shorteners, dating — 4.9M domains). Grows at runtime when pages fail license verification. `seed-blocklist` command imports domain list files.
+- GitHub/Codeberg forge indexing: detect `/{owner}/{repo}`, check license via API (SPDX match) with LICENSE file keyword fallback for NOASSERTION repos. Codeberg uses `default_branch` from Gitea API (not hardcoded `main`). Shared `matchLicenseText` for both forges. Fetches raw README only.
+- Auto-reindex PageRank: triggers in background goroutine when page count grows >5% since last reindex.
 - Frontier Attend: `inbound` column tracks how many indexed pages link to each frontier URL. Priority = `log(1 + inbound) * (1 + uniform(0, 0.1))`. Overfetch 3x, score, sort, return top N. Stochastic noise shuffles within tiers.
 - Parallel crawl worker (`crawl_worker.py`): N threads pull from frontier, submit pages, drain embed queue.
 - Domain lists as embedded text files: `blocked_domains.txt` (indexing), `copyleft_domains.txt` (license bypass), `frontier_blocked_domains.txt` (frontier filter).
@@ -78,9 +79,9 @@ Crawl and embed run on federated workers — PageLeft serves the work queue and 
   - Convergence gate: if `content_hash` unchanged across N recrawls, extend interval exponentially (1w → 2w → 1m → 3m). Parts bin: EMA applied to change frequency.
 
 **Other improvements**:
-- Domain blocklist expansion: [UT1 blacklists](https://dsi.ut-capitole.fr/blacklists/) (CC BY-SA). Flat lookup, zero inference cost.
 - Crawl discovery: accept sitemap.xml and RSS feeds as Perceive sources.
 - Bloom filter for URL dedup in `AddToFrontier`: currently does a full `GetPageByURL` query. At scale, a probabilistic cache avoids the DB round-trip. Parts bin: Cache × probabilistic → Bloom filter.
+- Bloom filter rebuild on deploy: the persistent `nonpermissive.bloom` learns domains at runtime, but can't *unlearn* when text file lists change (e.g., unblocking `github.com`). Deleting the file and restarting rebuilds from seed lists in ~30s. Automate as a deploy step: if `frontier_blocked_domains.txt` changed since last deploy, delete and re-seed. UT1 re-seed via `seed-blocklist` could also run on a monthly cron.
 
 **Open**: license detection misses prose/footer declarations. False negatives are safe; false positives are not.
 
