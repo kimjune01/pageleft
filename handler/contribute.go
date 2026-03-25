@@ -135,7 +135,7 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 		CrawledAt:   time.Now(),
 	}
 
-	pageID, err := h.db.InsertPageWithLinks(page, sub.Links, crawler.ShouldBlockFrontier)
+	pageID, err := h.db.InsertPageWithLinks(page, sub.Links, crawler.ShouldBlockFrontierFrom(sub.URL))
 	if err != nil {
 		http.Error(w, `{"error":"insert failed"}`, http.StatusInternalServerError)
 		return

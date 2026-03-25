@@ -85,6 +85,23 @@ func ShouldBlockFrontier(rawURL string) bool {
 	return !ResolveForFrontier(rawURL)
 }
 
+// ShouldBlockFrontierFrom returns a URLFilter that also blocks same-site
+// links for massive corpora (currently Wikipedia). Cross-domain links into
+// Wikipedia still pass; only Wikipedia→Wikipedia internal links are blocked.
+func ShouldBlockFrontierFrom(sourceURL string) func(string) bool {
+	sourceDomain := ExtractDomain(sourceURL)
+	return func(targetURL string) bool {
+		if ShouldBlockFrontier(targetURL) {
+			return true
+		}
+		// Block Wikipedia internal links — corpus is too large to spider.
+		if sourceDomain == "en.wikipedia.org" && ExtractDomain(targetURL) == "en.wikipedia.org" {
+			return true
+		}
+		return false
+	}
+}
+
 // ResolveForFrontier is a lighter check for AddToFrontier.
 // Skips forge API calls (expensive). Just checks domain-level gates.
 func ResolveForFrontier(rawURL string) bool {
