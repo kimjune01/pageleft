@@ -172,11 +172,11 @@ func findAnchorRelLicense(n *html.Node) *LicenseInfo {
 	return nil
 }
 
-// <meta name="license" content="...">
+// <meta name="license" content="..."> or <meta name="dc.rights" content="...">
 func findMetaLicense(n *html.Node) *LicenseInfo {
 	if n.Type == html.ElementNode && n.Data == "meta" {
 		name := attr(n, "name")
-		if strings.EqualFold(name, "license") {
+		if strings.EqualFold(name, "license") || strings.EqualFold(name, "dc.rights") {
 			content := attr(n, "content")
 			if content != "" {
 				return checkURL(content)

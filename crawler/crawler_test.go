@@ -223,6 +223,11 @@ func TestDetectLicense(t *testing.T) {
 			`<html><head><link rel="license" href="https://unlicense.org/"></head></html>`,
 			false, "Unlicense",
 		},
+		{
+			"dc.rights CC0 (gwern.net style)",
+			`<html><head><meta name="dc.rights" content="https://creativecommons.org/publicdomain/zero/1.0/"></head></html>`,
+			false, "CC0",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
