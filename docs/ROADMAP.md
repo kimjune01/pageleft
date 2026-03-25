@@ -47,18 +47,22 @@ At current scale (~1,600 pages), I am Attend and Consolidate. I review pages, tu
 - Freshness as ranking signal: multiply rank by decay factor based on `last_crawled_at` staleness. Recently verified pages rank higher. Incentivizes draining the recrawl queue.
 - Crawl discovery: accept sitemap.xml and RSS feeds as seed sources.
 
-**Open**: license detection misses prose/footer declarations. False negatives are safe; false positives are not.
+**Open**:
+- License detection misses prose/footer declarations. False negatives are safe; false positives are not.
+- Wikipedia/Wikimedia return 403 to `PageLeftBot/1.0` UA. Options: use Wikipedia REST API (`/api/rest_v1/page/html/`), or add Wikipedia to a known-copyleft allowlist that skips fetch-based license verification (all Wikimedia content is CC BY-SA 4.0).
 
 ### Embed pipe
 
 **Goal**: make every page searchable by producing chunk-level embeddings.
 
-**Done**: unified embed work queue (`{chunk_id, page_id, text}`), auto-chunking on demand.
+**Done**: unified embed work queue (`{chunk_id, page_id, text}`), auto-chunking on demand. Auto page embedding: when the last chunk embedding arrives via `POST /api/contribute/embedding`, the server averages chunk embeddings into a page-level embedding. No manual backfill needed.
 
 **Next**:
 - Embedding invalidation handled by recrawl-via-frontier (see crawl pipe above). When `content_hash` changes, old chunk embeddings are nulled and new chunks enter the work queue. This is a Remember → Perceive handshake break — stale embeddings violate the contract. See [The Handshake](https://june.kim/the-handshake).
 
-**Later**: multi-model embeddings — accept vectors from different models, normalize to a common similarity space.
+**Later**:
+- Multi-model embeddings — accept vectors from different models, normalize to a common similarity space.
+- Search score discrimination — semantic scores cluster in a narrow band (0.6–0.7), making ranking insensitive to query relevance. Needs an eval set before tuning. Related to score balancing in the search pipe.
 
 ### Quality pipe
 

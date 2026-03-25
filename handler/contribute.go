@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -306,6 +307,12 @@ func (h *Handler) handleContributeEmbedding(w http.ResponseWriter, r *http.Reque
 			http.Error(w, `{"error":"update chunk failed"}`, http.StatusInternalServerError)
 			return
 		}
+		// Auto-compute page embedding when all chunks are embedded.
+		if pageID, err := h.db.PageIDForChunk(sub.ChunkID); err == nil {
+			if allDone, err := h.db.AllChunksEmbedded(pageID); err == nil && allDone {
+				h.computePageEmbedding(pageID)
+			}
+		}
 	} else if sub.PageID != 0 {
 		if err := h.db.UpdateEmbedding(sub.PageID, sub.Embedding); err != nil {
 			http.Error(w, `{"error":"update page failed"}`, http.StatusInternalServerError)
@@ -318,6 +325,34 @@ func (h *Handler) handleContributeEmbedding(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"accepted": true})
+}
+
+// computePageEmbedding averages chunk embeddings into a page-level embedding.
+func (h *Handler) computePageEmbedding(pageID int64) {
+	chunks, err := h.db.ChunkEmbeddingsForPage(pageID)
+	if err != nil || len(chunks) == 0 {
+		return
+	}
+	dim := len(chunks[0])
+	avg := make([]float64, dim)
+	for _, emb := range chunks {
+		for i, v := range emb {
+			avg[i] += v
+		}
+	}
+	n := float64(len(chunks))
+	var norm float64
+	for i := range avg {
+		avg[i] /= n
+		norm += avg[i] * avg[i]
+	}
+	if norm > 0 {
+		scale := 1.0 / math.Sqrt(norm)
+		for i := range avg {
+			avg[i] *= scale
+		}
+	}
+	h.db.UpdateEmbedding(pageID, avg)
 }
 
 // handleWorkQuality returns random pages for quality review.

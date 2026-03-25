@@ -466,6 +466,22 @@ func (db *DB) UpdateChunkEmbedding(chunkID int64, emb []float64) error {
 	return err
 }
 
+// PageIDForChunk returns the page_id for a given chunk.
+func (db *DB) PageIDForChunk(chunkID int64) (int64, error) {
+	var pageID int64
+	err := db.conn.QueryRow("SELECT page_id FROM chunks WHERE id = ?", chunkID).Scan(&pageID)
+	return pageID, err
+}
+
+// AllChunksEmbedded returns true if every chunk for the page has an embedding.
+func (db *DB) AllChunksEmbedded(pageID int64) (bool, error) {
+	var missing int
+	err := db.conn.QueryRow(`
+		SELECT COUNT(*) FROM chunks
+		WHERE page_id = ? AND (embedding IS NULL OR length(embedding) <= 5)`, pageID).Scan(&missing)
+	return missing == 0, err
+}
+
 func (db *DB) PagesWithoutChunks(limit int) ([]*Page, error) {
 	rows, err := db.conn.Query(`
 		SELECT p.id, p.url, p.title, p.text_content, p.license_url, p.license_type, p.pagerank, p.crawled_at, p.content_hash
