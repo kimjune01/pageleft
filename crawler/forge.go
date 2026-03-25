@@ -5,9 +5,18 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
+
+// GitHubToken is read from GITHUB_PUBLIC_API_KEY at init.
+// Unauthenticated: 60 req/hr. Authenticated: 5,000 req/hr.
+var GitHubToken string
+
+func init() {
+	GitHubToken = os.Getenv("GITHUB_PUBLIC_API_KEY")
+}
 
 // Copyleft SPDX identifiers.
 var copyleftSPDX = map[string]bool{
@@ -59,6 +68,9 @@ func githubLicense(owner, repo string) (string, string) {
 	req, _ := http.NewRequest("GET", apiURL, nil)
 	req.Header.Set("User-Agent", RobotsUserAgent)
 	req.Header.Set("Accept", "application/vnd.github+json")
+	if GitHubToken != "" {
+		req.Header.Set("Authorization", "Bearer "+GitHubToken)
+	}
 	resp, err := forgeClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		if resp != nil {
