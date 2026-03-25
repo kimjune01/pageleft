@@ -116,7 +116,7 @@ func cmdServe(dbPath string) {
 	if idx := strings.LastIndex(dbPath, "/"); idx >= 0 {
 		dbDir = dbPath[:idx]
 	}
-	crawler.InitBloomFilter(dbDir)
+	crawler.InitBloomFilters(dbDir)
 
 	embedder := platform.NewEmbedder()
 	h := handler.New(db, embedder, Version)
@@ -386,9 +386,9 @@ func cmdSeedBlocklist(dbPath string) {
 	if idx := strings.LastIndex(dbPath, "/"); idx >= 0 {
 		dbDir = dbPath[:idx]
 	}
-	crawler.InitBloomFilter(dbDir)
+	crawler.InitBloomFilters(dbDir)
 
-	n, err := crawler.SeedFromFile(file)
+	n, err := crawler.SeedStatic(file)
 	if err != nil {
 		log.Fatalf("seed: %v", err)
 	}

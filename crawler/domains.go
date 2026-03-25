@@ -22,11 +22,13 @@ var copyleftDomains map[string]DomainLicense
 var blockedDomains map[string]bool
 var frontierBlockedDomains map[string]bool
 
-// NonPermissiveFilter is a persistent Bloom filter of domains known to be
-// neither copyleft nor public domain. Seeded from blocked domain lists;
-// grows as new domains fail license verification. Persisted to disk.
-var NonPermissiveFilter *BloomFilter
-var bloomFilterPath string
+// Two Bloom filters, one concern each:
+//   StaticFilter  — rebuilt from text files + UT1 on deploy. Deterministic.
+//   DynamicFilter — starts empty, grows from runtime license failures. Never rebuilt.
+// Either one blocking = blocked.
+var StaticFilter *BloomFilter
+var DynamicFilter *BloomFilter
+var dynamicFilterPath string
 
 func init() {
 	copyleftDomains = loadCopyleftDomains()
@@ -34,18 +36,30 @@ func init() {
 	frontierBlockedDomains = loadDomainList("frontier_blocked_domains.txt")
 }
 
-// InitBloomFilter loads or creates the non-copyleft domain Bloom filter.
-// Must be called after init with the DB path to determine storage location.
-func InitBloomFilter(dbDir string) {
-	bloomFilterPath = dbDir + "/nonpermissive.bloom"
-	NonPermissiveFilter = LoadBloomFilterN(bloomFilterPath, 5_000_000, 0.001, frontierBlockedDomains, blockedDomains)
+// InitBloomFilters creates both filters.
+// Static: always rebuilt from text file seeds (no persistence — deterministic).
+// Dynamic: loaded from disk if exists, otherwise starts empty.
+func InitBloomFilters(dbDir string) {
+	// Static: rebuild every startup from text files
+	StaticFilter = NewBloomFilter(5_000_000, 0.001)
+	for d := range frontierBlockedDomains {
+		StaticFilter.Add(d)
+	}
+	for d := range blockedDomains {
+		StaticFilter.Add(d)
+	}
+
+	// Dynamic: persist across restarts, only grows
+	dynamicFilterPath = dbDir + "/learned-nonpermissive.bloom"
+	DynamicFilter = LoadBloomFilterN(dynamicFilterPath, 100_000, 0.001)
 }
 
-// SeedFromFile adds every line from a domain list file to the Bloom filter.
-// Used to import public blocklists (e.g., UT1 blacklists).
-func SeedFromFile(path string) (int, error) {
-	if NonPermissiveFilter == nil {
-		return 0, fmt.Errorf("bloom filter not initialized")
+// SeedStatic adds domains from a file to the static filter.
+// Used to import public blocklists (e.g., UT1) at deploy time.
+// Does NOT persist — the static filter is rebuilt every startup.
+func SeedStatic(path string) (int, error) {
+	if StaticFilter == nil {
+		return 0, fmt.Errorf("static filter not initialized")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -56,14 +70,22 @@ func SeedFromFile(path string) (int, error) {
 	for scanner.Scan() {
 		domain := strings.TrimSpace(scanner.Text())
 		if domain != "" && !strings.HasPrefix(domain, "#") {
-			NonPermissiveFilter.Add(domain)
+			StaticFilter.Add(domain)
 			n++
 		}
 	}
-	if bloomFilterPath != "" {
-		NonPermissiveFilter.Save(bloomFilterPath)
-	}
 	return n, nil
+}
+
+// IsNonPermissive checks both filters. Either blocking = blocked.
+func IsNonPermissive(domain string) bool {
+	if StaticFilter != nil && StaticFilter.Contains(domain) {
+		return true
+	}
+	if DynamicFilter != nil && DynamicFilter.Contains(domain) {
+		return true
+	}
+	return false
 }
 
 func loadCopyleftDomains() map[string]DomainLicense {
@@ -112,32 +134,28 @@ func loadDomainList(filename string) map[string]bool {
 }
 
 // IsFrontierBlocked returns true if the URL's domain should not enter the frontier.
-// Fast path: Bloom filter lookup (O(1), no false negatives).
-// Slow path: exact set with subdomain matching (for domains not in the Bloom filter).
 func IsFrontierBlocked(rawURL string) bool {
 	domain := ExtractDomain(rawURL)
 	if domain == "" {
 		return true
 	}
-	// Bloom filter: fast rejection for domains that are neither copyleft nor public domain
-	if NonPermissiveFilter.Contains(domain) {
+	if IsNonPermissive(domain) {
 		return true
 	}
-	// Exact set: catches subdomains (e.g., m.facebook.com matches facebook.com)
 	return matchDomain(frontierBlockedDomains, domain)
 }
 
-// LearnNonPermissive adds a domain to the Bloom filter after a page from that
-// domain fails license verification (no copyleft or public domain license found).
-// Persists to disk so the learning survives restarts.
+// LearnNonPermissive adds a domain to the dynamic Bloom filter after a page
+// fails license verification. Only the dynamic filter grows at runtime;
+// the static filter is rebuilt from text files on deploy.
 func LearnNonPermissive(rawURL string) {
 	domain := ExtractDomain(rawURL)
-	if domain == "" || NonPermissiveFilter == nil {
+	if domain == "" || DynamicFilter == nil {
 		return
 	}
-	NonPermissiveFilter.Add(domain)
-	if bloomFilterPath != "" {
-		NonPermissiveFilter.Save(bloomFilterPath)
+	DynamicFilter.Add(domain)
+	if dynamicFilterPath != "" {
+		DynamicFilter.Save(dynamicFilterPath)
 	}
 }
 

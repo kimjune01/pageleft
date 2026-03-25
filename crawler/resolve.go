@@ -42,8 +42,8 @@ func Resolve(rawURL string) Resolution {
 		return Resolution{Action: Block, Reason: "domain blocked: platform ToS"}
 	}
 
-	// 3. Bloom filter (probabilistic — learned non-permissive domains)
-	if NonPermissiveFilter != nil && NonPermissiveFilter.Contains(domain) {
+	// 3. Bloom filters (static + dynamic — non-permissive domains)
+	if IsNonPermissive(domain) {
 		return Resolution{Action: Block, Reason: "domain non-permissive (bloom)"}
 	}
 
@@ -98,7 +98,7 @@ func ResolveForFrontier(rawURL string) bool {
 	if matchDomain(blockedDomains, domain) {
 		return false
 	}
-	if NonPermissiveFilter != nil && NonPermissiveFilter.Contains(domain) {
+	if IsNonPermissive(domain) {
 		return false
 	}
 	if matchDomain(frontierBlockedDomains, domain) {
