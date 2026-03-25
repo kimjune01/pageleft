@@ -13,13 +13,15 @@ type Handler struct {
 	db       *platform.DB
 	embedder *platform.Embedder
 	robots   *crawler.RobotsChecker
+	version  string
 }
 
-func New(db *platform.DB, embedder *platform.Embedder) *Handler {
+func New(db *platform.DB, embedder *platform.Embedder, version string) *Handler {
 	return &Handler{
 		db:       db,
 		embedder: embedder,
 		robots:   crawler.NewRobotsChecker(&http.Client{Timeout: 10 * time.Second}),
+		version:  version,
 	}
 }
 

@@ -130,6 +130,7 @@ type statsResponse struct {
 	QualityCoverage float64 `json:"quality_coverage"`
 	EmbeddingModel  string  `json:"embedding_model"`
 	EmbeddingDim    int     `json:"embedding_dim"`
+	Version         string  `json:"version"`
 }
 
 // indexURL fetches a URL, checks for a copyleft license, extracts content,
@@ -241,7 +242,9 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 	pages, _ := h.db.PageCount()
 	chunks, _ := h.db.ChunkCount()
 	links, _ := h.db.LinkCount()
-	qualityCov, _ := h.db.QualityCoverage(3)
+	// Threshold 1: structural scorer is currently the only reviewer.
+	// Raise to 3 when federated quality workers are active.
+	qualityCov, _ := h.db.QualityCoverage(1)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(statsResponse{
@@ -251,6 +254,7 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 		QualityCoverage: qualityCov,
 		EmbeddingModel:  platform.EmbeddingModel,
 		EmbeddingDim:    platform.EmbeddingDim,
+		Version:         h.version,
 	})
 }
 

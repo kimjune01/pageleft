@@ -45,7 +45,7 @@ func TestSearch_HollowPage_ReIndexed(t *testing.T) {
 		t.Fatal("expected empty text_content for hollow page")
 	}
 
-	h := New(db, platform.NewEmbedder())
+	h := New(db, platform.NewEmbedder(), "test")
 
 	// Search with the URL as query — should trigger re-indexing.
 	// The search response itself may fail (no HF_TOKEN for query embedding),
@@ -103,7 +103,7 @@ func TestSearch_TextQuery_ReturnsResults(t *testing.T) {
 		t.Fatalf("insert page: %v", err)
 	}
 
-	h := New(db, platform.NewEmbedder())
+	h := New(db, platform.NewEmbedder(), "test")
 
 	// Text query — embedding will fail without HF_TOKEN, so expect 500 or empty results.
 	// This test just verifies the handler doesn't panic on a normal text query.

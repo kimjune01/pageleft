@@ -35,7 +35,7 @@ func newTestHandler(t *testing.T) (*Handler, func()) {
 	if err != nil {
 		t.Fatalf("create test db: %v", err)
 	}
-	h := New(db, platform.NewEmbedder())
+	h := New(db, platform.NewEmbedder(), "test")
 	return h, func() { db.Close() }
 }
 

@@ -19,10 +19,17 @@ import (
 	"github.com/kimjune01/pageleft/search"
 )
 
+var Version = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: pageleft <crawl|reindex|serve|chunk-backfill|link-backfill|embed-backfill>\n")
+		fmt.Fprintf(os.Stderr, "usage: pageleft <crawl|reindex|serve|version|chunk-backfill|link-backfill|embed-backfill>\n")
 		os.Exit(1)
+	}
+
+	if os.Args[1] == "version" {
+		fmt.Println(Version)
+		return
 	}
 
 	dbPath := envOr("PAGELEFT_DB", "pageleft.db")
@@ -101,7 +108,7 @@ func cmdServe(dbPath string) {
 	defer db.Close()
 
 	embedder := platform.NewEmbedder()
-	h := handler.New(db, embedder)
+	h := handler.New(db, embedder, Version)
 
 	addr := ":" + *port
 	log.Printf("serving on http://localhost%s", addr)

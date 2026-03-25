@@ -72,6 +72,7 @@ Quality is not a page-level score that an LLM assigns. Originality, novelty, and
 - Worker client (`quality_scorer.py`): pulls from `/api/work/quality`, scores, submits.
 
 **Next**:
+- Raise quality_coverage threshold from 1 to 3 when federated quality workers are active. Currently the structural scorer is the only reviewer, so requiring 3+ reviews makes the metric meaningless. The threshold gates the `/api/stats` coverage number, not the ranking formula.
 - Time-decayed quality: a 0.9 review from six months ago weighs less than a 0.7 from today. Decay is a Consolidate operation — read review timestamps, write decayed scores. See [parts bin Consolidate catalog](https://june.kim/the-parts-bin#catalog).
 
 **Open**: review gaming — random sampling and dedup prevent naive Sybil attacks. Coordinated attackers can still inflate scores.
