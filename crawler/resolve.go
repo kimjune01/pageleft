@@ -124,7 +124,19 @@ func ResolveForFrontier(rawURL string) bool {
 	return true
 }
 
-// parseForgeURL detects github.com/{owner}/{repo} and codeberg.org/{owner}/{repo}.
+// CanonicalPageURL normalizes a URL for storage. Collapses forge deep paths
+// to owner/repo so the same repo isn't stored multiple times.
+func CanonicalPageURL(rawURL string) string {
+	if owner, repo, ok := parseForgeURL(rawURL); ok {
+		host := ExtractDomain(rawURL)
+		return "https://" + host + "/" + owner + "/" + repo
+	}
+	return rawURL
+}
+
+// parseForgeURL extracts owner/repo from any github.com or codeberg.org URL.
+// Matches github.com/{owner}/{repo}, github.com/{owner}/{repo}/tree/main, etc.
+// Only the first two path segments (owner/repo) matter — the README is always fetched.
 func parseForgeURL(rawURL string) (string, string, bool) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -135,7 +147,7 @@ func parseForgeURL(rawURL string) (string, string, bool) {
 		return "", "", false
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if len(parts) != 2 {
+	if len(parts) < 2 {
 		return "", "", false
 	}
 	owner, repo := parts[0], parts[1]

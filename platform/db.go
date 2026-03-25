@@ -500,7 +500,7 @@ func (db *DB) AddToFrontier(rawURL string, depth int) error {
 }
 
 // NormalizeURL canonicalizes a URL: strips fragment, trailing slash,
-// and upgrades http to https for dedup consistency.
+// upgrades http to https, and collapses forge URLs to owner/repo.
 func NormalizeURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -511,6 +511,15 @@ func NormalizeURL(rawURL string) string {
 	// Canonical scheme: treat http and https as the same page.
 	if u.Scheme == "http" {
 		u.Scheme = "https"
+	}
+	// Collapse GitHub/Codeberg deep paths to owner/repo.
+	// github.com/owner/repo/blob/main/file.py → github.com/owner/repo
+	host := strings.ToLower(u.Hostname())
+	if host == "github.com" || host == "codeberg.org" {
+		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+		if len(parts) >= 2 && parts[0] != "" && parts[1] != "" {
+			u.Path = "/" + parts[0] + "/" + parts[1]
+		}
 	}
 	return u.String()
 }

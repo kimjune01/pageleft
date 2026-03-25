@@ -126,7 +126,7 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 
 	h.db.LogContribution("crawl", platform.ContributorHash(r.RemoteAddr))
 	page := &platform.Page{
-		URL:         sub.URL,
+		URL:         crawler.CanonicalPageURL(sub.URL),
 		Title:       sub.Title,
 		TextContent: sub.TextContent,
 		LicenseURL:  result.License.URL,
