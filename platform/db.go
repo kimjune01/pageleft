@@ -235,6 +235,12 @@ func (db *DB) SaveURLBloom() error {
 	return db.urlBloom.save(db.bloomPath)
 }
 
+// WALCheckpoint merges the write-ahead log into the main DB file.
+// Uses PASSIVE mode: non-blocking, merges what it can without waiting.
+func (db *DB) WALCheckpoint() {
+	db.conn.Exec("PRAGMA wal_checkpoint(PASSIVE)")
+}
+
 func (db *DB) Close() error {
 	db.SaveURLBloom()
 	if db.chunkBloom != nil {

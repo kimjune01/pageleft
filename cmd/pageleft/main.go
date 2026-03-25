@@ -118,6 +118,14 @@ func cmdServe(dbPath string) {
 	}
 	crawler.InitBloomFilters(dbDir)
 
+	// Periodic WAL checkpoint — merges write-ahead log into main DB.
+	// PASSIVE won't block writers; it merges what it can.
+	go func() {
+		for range time.Tick(5 * time.Minute) {
+			db.WALCheckpoint()
+		}
+	}()
+
 	embedder := platform.NewEmbedder()
 	h := handler.New(db, embedder, Version)
 
