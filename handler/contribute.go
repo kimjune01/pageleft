@@ -449,7 +449,13 @@ func (h *Handler) handleContributeQuality(w http.ResponseWriter, r *http.Request
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"accepted": true})
+	json.NewEncoder(w).Encode(map[string]any{
+		"accepted": true,
+		"next": map[string]string{
+			"quality": "GET /api/work/quality?limit=10 — review more pages",
+			"embed":   "GET /api/work/embed?limit=10 — embed chunks if any pending",
+		},
+	})
 }
 
 type compilableSubmission struct {
