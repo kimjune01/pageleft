@@ -35,41 +35,48 @@ At current scale (~1,600 pages), I am Attend and Consolidate. I review pages, tu
 
 **Goal**: grow the index with new copyleft-licensed pages.
 
-**Done**: federated work queues, robots.txt, license detection via `<meta>` tags and `dc.rights`. Wikipedia/Wikimedia fetched via REST API (`/api/rest_v1/page/html/`). Wiki→wiki links excluded from frontier (depth-1 crawl policy).
+The crawl pipe maps to the six-stage pipeline from the [parts bin](https://june.kim/the-parts-bin). Each stage has a contract; the crawl pipe's job is to implement all six for URL→page ingestion.
 
-#### The frontier problem
+| Stage | Crawl pipe role | Contract | Parts bin algorithm |
+|---|---|---|---|
+| Perceive | Fetch page, parse HTML | Raw bytes → structured DOM | HTML parsing, Wikipedia REST API |
+| Cache | Dedup by URL + content_hash | Retrievable, no duplicates | Hash index (URL), Rabin fingerprint (content_hash) |
+| Filter | License check, domain block, robots.txt | Strictly smaller: only copyleft passes | Predicate filtering (WHERE) via `frontier_blocked_domains.txt`, `copyleft_domains.txt` |
+| Attend | Frontier prioritization | Best URL first | Missing — currently FIFO |
+| Consolidate | Recrawl policy, freshness decay | Parameters update from observed data | Missing — no recrawl loop |
+| Remember | Write to pages/chunks/frontier | Lossless append | WAL (SQLite), `AddToFrontier` |
 
-The frontier has 54K URLs and no prioritization. Breakdown: 15K Wikipedia (blocked by depth-1 but not pruned), 14K gwern.net, 2.4K US Code, 1.7K LibreTexts, 900 GitHub, 700 Amazon, 480 june.kim. Most are noise. A worker calling `GET /api/frontier` gets FIFO-ordered junk — no way to know what's copyleft, what's already indexed, or what's worth crawling.
+**Done** (Perceive, Cache, Filter, Remember):
+- Federated work queues, robots.txt, license detection via `<meta>`, `dc.rights`, and copyleft domain allowlist
+- Wikipedia/Wikimedia fetched via REST API. Wiki→wiki excluded from frontier (depth-1 policy)
+- Frontier filter on write: `AddToFrontier` rejects already-indexed, non-HTTP, and `frontier_blocked_domains.txt` entries. `prune-frontier` command for one-time cleanup. Reduced frontier from 55K → 32K.
+- Domain lists as embedded text files: `blocked_domains.txt` (indexing), `copyleft_domains.txt` (license bypass), `frontier_blocked_domains.txt` (frontier filter)
+- Content dedup via `content_hash` (SHA-256 of response body). `ON CONFLICT(url) DO NOTHING` prevents re-indexing known URLs.
 
-The frontier should be a prioritized work queue, not a dumping ground. Three stages:
+**Next: Attend** (frontier prioritization)
+- The frontier is a flat table with no priority signal. Workers get FIFO-ordered entries. After pruning, 32K entries remain — 14K gwern, 2.2K LibreTexts, 2.4K US Code. A worker has no way to know that LibreTexts (CC BY-SA STEM textbooks) is higher-value than a random gwern essay.
+- Add a `priority` column to the frontier table. Score on insert:
+  - Copyleft-domain URLs (in `copyleft_domains.txt`): priority 10
+  - URLs linked from multiple indexed pages: priority = inbound count
+  - Everything else: priority 1
+- `GET /api/frontier` returns `ORDER BY priority DESC, id ASC`. Workers drain highest-priority first.
+- Parts bin: this is the Attend stage operating on a flat data structure — MMR or simple ranking by composite score. No need for MCTS or beam search at this scale.
 
-**Stage 1: Filter on write** (immediate)
-- Don't add URLs to the frontier if:
-  - Already indexed (check pages table)
-  - Domain is blocked (amazon.com, youtube.com, github.com, ncbi.nlm.nih.gov)
-  - URL is a Wikipedia article and source page is also Wikipedia (already done)
-- Prune the existing frontier: delete already-indexed, blocked-domain, and duplicate entries.
-- Expected result: 54K → ~5-10K actionable URLs.
-
-**Stage 2: Prioritize on read** (next)
-- Score frontier entries by: copyleft-domain membership (known CC BY-SA domains rank highest), inbound link count from indexed pages, depth from seed.
-- `GET /api/frontier` returns the highest-priority entries, not the oldest.
-- Workers drain the highest-value URLs first.
-
-**Stage 3: Recrawl loop** (later)
+**Later: Consolidate** (recrawl + freshness)
 - Push stale pages back onto the frontier, sorted by oldest `crawled_at`. Same fetch pipeline, different seed. One mechanism handles freshness, invalidation, and tombstoning:
   - 200 + same `content_hash` → bump `crawled_at`, done
   - 200 + new `content_hash` → re-chunk, null old embeddings, re-enter embed work queue
   - 301/302 → update canonical URL, merge with existing entry at target
-  - 4xx (after 2-3 consecutive failures) → null embeddings (drops from search), keep page row (prevents re-indexing dead URL)
+  - 4xx (after 2-3 consecutive failures) → null embeddings (drops from search), keep page row
   - 5xx → do nothing, server might be temporarily down
   - Conditional GET (`ETag`, `Last-Modified`) to skip unchanged pages cheaply
-- Freshness as ranking signal: multiply rank by decay factor based on `crawled_at` staleness. Recently verified pages rank higher. Incentivizes draining the recrawl queue.
+- Freshness as ranking signal: multiply rank by decay factor based on `crawled_at` staleness. Recently verified pages rank higher.
+- Parts bin: this is Consolidate reading from Remember (review timestamps, crawl outcomes) and writing parameter changes (decay multipliers, priority updates). Biology's scheduler is sleep; PageLeft's is a cron job.
 
-#### Other crawl improvements
-
-- Domain blocklist: [UT1 blacklists](https://dsi.ut-capitole.fr/blacklists/) (CC BY-SA). Flat lookup, zero inference cost.
-- Crawl discovery: accept sitemap.xml and RSS feeds as seed sources.
+**Other improvements**:
+- Domain blocklist expansion: [UT1 blacklists](https://dsi.ut-capitole.fr/blacklists/) (CC BY-SA). Flat lookup, zero inference cost.
+- Crawl discovery: accept sitemap.xml and RSS feeds as Perceive sources.
+- Bloom filter for URL dedup: `AddToFrontier` currently does a full `GetPageByURL` query. At scale, a probabilistic cache (Bloom filter, parts bin: Cache × probabilistic) avoids the DB round-trip. False positives are safe (skip a URL that wasn't indexed), false negatives impossible.
 
 **Open**: license detection misses prose/footer declarations. False negatives are safe; false positives are not.
 
