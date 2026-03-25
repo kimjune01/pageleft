@@ -22,9 +22,11 @@ import (
 )
 
 type DB struct {
-	conn      *sql.DB
-	urlBloom  *urlBloomFilter
-	bloomPath string
+	conn          *sql.DB
+	urlBloom      *urlBloomFilter
+	bloomPath     string
+	chunkBloom    *urlBloomFilter
+	chunkBloomPath string
 }
 
 const (
@@ -154,12 +156,15 @@ func NewDB(path string) (*DB, error) {
 	if err := conn.Ping(); err != nil {
 		return nil, fmt.Errorf("ping db: %w", err)
 	}
-	bloomPath := filepath.Join(filepath.Dir(path), "url-seen.bloom")
-	db := &DB{conn: conn, bloomPath: bloomPath}
+	dir := filepath.Dir(path)
+	bloomPath := filepath.Join(dir, "url-seen.bloom")
+	chunkBloomPath := filepath.Join(dir, "chunk-seen.bloom")
+	db := &DB{conn: conn, bloomPath: bloomPath, chunkBloomPath: chunkBloomPath}
 	if err := db.migrate(); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	db.initURLBloom()
+	db.initChunkBloom()
 	return db, nil
 }
 
@@ -193,6 +198,32 @@ func (db *DB) initURLBloom() {
 	db.urlBloom.save(db.bloomPath)
 }
 
+// initChunkBloom loads the chunk content bloom filter, or seeds from DB if missing.
+func (db *DB) initChunkBloom() {
+	db.chunkBloom = loadURLBloom(db.chunkBloomPath)
+	empty := true
+	for _, w := range db.chunkBloom.bits {
+		if w != 0 {
+			empty = false
+			break
+		}
+	}
+	if !empty {
+		return
+	}
+	rows, err := db.conn.Query("SELECT text FROM chunks")
+	if err != nil {
+		return
+	}
+	for rows.Next() {
+		var t string
+		rows.Scan(&t)
+		db.chunkBloom.add(t)
+	}
+	rows.Close()
+	db.chunkBloom.save(db.chunkBloomPath)
+}
+
 // SaveURLBloom persists the URL bloom filter to disk. Call periodically
 // or on graceful shutdown to avoid re-seeding from DB on next startup.
 func (db *DB) SaveURLBloom() error {
@@ -204,6 +235,9 @@ func (db *DB) SaveURLBloom() error {
 
 func (db *DB) Close() error {
 	db.SaveURLBloom()
+	if db.chunkBloom != nil {
+		db.chunkBloom.save(db.chunkBloomPath)
+	}
 	return db.conn.Close()
 }
 
@@ -275,7 +309,6 @@ func (db *DB) migrate() error {
 	db.conn.Exec("ALTER TABLE quality_reviews ADD COLUMN contributor TEXT NOT NULL DEFAULT ''")
 	db.conn.Exec("ALTER TABLE frontier ADD COLUMN inbound INTEGER NOT NULL DEFAULT 1")
 	db.conn.Exec("CREATE INDEX IF NOT EXISTS idx_frontier_inbound ON frontier(inbound DESC)")
-
 	return nil
 }
 
@@ -607,6 +640,13 @@ func (db *DB) InsertPageWithLinks(p *Page, links []string, shouldBlock URLFilter
 
 func (db *DB) InsertChunks(pageID int64, chunks []Chunk) error {
 	for _, c := range chunks {
+		// Skip chunks whose text already exists somewhere in the corpus.
+		if db.chunkBloom != nil && db.chunkBloom.contains(c.Text) {
+			continue
+		}
+		if db.chunkBloom != nil {
+			db.chunkBloom.add(c.Text)
+		}
 		var embJSON *string
 		if len(c.Embedding) > 0 {
 			b, err := json.Marshal(c.Embedding)
