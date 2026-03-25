@@ -1,0 +1,58 @@
+# Domains excluded from the crawl frontier.
+# Superset of blocked_domains.txt — includes paywalls, social media,
+# link shorteners, and noise that shouldn't enter the frontier even
+# if individual pages might technically be indexable.
+# One domain per line. Subdomains match automatically.
+
+# Platform ToS (also in blocked_domains.txt)
+medium.com
+lesswrong.com
+substack.com
+
+# Social media
+twitter.com
+x.com
+facebook.com
+instagram.com
+reddit.com
+linkedin.com
+news.ycombinator.com
+
+# Ecommerce / not content
+amazon.com
+goodreads.com
+uptontea.com
+
+# Code hosting (not prose content)
+github.com
+gitlab.com
+bitbucket.org
+
+# Paywalls / all-rights-reserved publishers
+nytimes.com
+wsj.com
+economist.com
+nature.com
+sciencedirect.com
+springer.com
+wiley.com
+jstor.org
+acm.org
+ieee.org
+
+# Link indirection / archives (useful but not copyleft-by-default)
+doi.org
+dx.doi.org
+archive.org
+web.archive.org
+google.com
+t.co
+bit.ly
+tinyurl.com
+
+# Government (already well-covered, high noise-to-signal in frontier)
+# Uncomment to block: uscode.house.gov, ecfr.gov
+
+# Misc noise discovered in frontier
+ncbi.nlm.nih.gov
+predictionbook.com

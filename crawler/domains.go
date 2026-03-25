@@ -8,6 +8,7 @@ import (
 
 //go:embed copyleft_domains.txt
 //go:embed blocked_domains.txt
+//go:embed frontier_blocked_domains.txt
 var domainFiles embed.FS
 
 type DomainLicense struct {
@@ -17,10 +18,12 @@ type DomainLicense struct {
 
 var copyleftDomains map[string]DomainLicense
 var blockedDomains map[string]bool
+var frontierBlockedDomains map[string]bool
 
 func init() {
 	copyleftDomains = loadCopyleftDomains()
 	blockedDomains = loadBlockedDomains()
+	frontierBlockedDomains = loadDomainList("frontier_blocked_domains.txt")
 }
 
 func loadCopyleftDomains() map[string]DomainLicense {
@@ -48,8 +51,12 @@ func loadCopyleftDomains() map[string]DomainLicense {
 }
 
 func loadBlockedDomains() map[string]bool {
+	return loadDomainList("blocked_domains.txt")
+}
+
+func loadDomainList(filename string) map[string]bool {
 	m := make(map[string]bool)
-	data, err := domainFiles.ReadFile("blocked_domains.txt")
+	data, err := domainFiles.ReadFile(filename)
 	if err != nil {
 		return m
 	}
@@ -62,6 +69,15 @@ func loadBlockedDomains() map[string]bool {
 		m[line] = true
 	}
 	return m
+}
+
+// IsFrontierBlocked returns true if the URL's domain should not enter the frontier.
+func IsFrontierBlocked(rawURL string) bool {
+	domain := ExtractDomain(rawURL)
+	if domain == "" {
+		return true
+	}
+	return matchDomain(frontierBlockedDomains, domain)
 }
 
 // matchDomain checks if domain matches any entry exactly or as a subdomain.

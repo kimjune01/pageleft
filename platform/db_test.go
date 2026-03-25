@@ -33,7 +33,7 @@ func insertTestPage(t *testing.T, db *DB) int64 {
 		LicenseType: "CC BY-SA",
 		ContentHash: "abc123",
 	}
-	id, err := db.InsertPageWithLinks(page, nil)
+	id, err := db.InsertPageWithLinks(page, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

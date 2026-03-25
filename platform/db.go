@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"net/url"
 	"strings"
 	"time"
 
@@ -357,9 +356,9 @@ func (db *DB) FrontierSize() (int, error) {
 }
 
 // PruneFrontier removes frontier entries that are already indexed,
-// from blocked domains, or are wiki links (handled by depth-1 policy).
+// non-HTTP, or matched by the provided filter function.
 // Returns the number of entries removed.
-func (db *DB) PruneFrontier() (int64, error) {
+func (db *DB) PruneFrontier(shouldBlock URLFilter) (int64, error) {
 	// Delete already-indexed
 	r1, _ := db.conn.Exec(`DELETE FROM frontier WHERE url IN (SELECT url FROM pages)`)
 	n1, _ := r1.RowsAffected()
@@ -368,7 +367,10 @@ func (db *DB) PruneFrontier() (int64, error) {
 	r2, _ := db.conn.Exec(`DELETE FROM frontier WHERE url NOT LIKE 'http://%' AND url NOT LIKE 'https://%'`)
 	n2, _ := r2.RowsAffected()
 
-	// Delete blocked domains — need to do this in Go since SQLite doesn't have easy domain extraction
+	// Delete domain-blocked entries
+	if shouldBlock == nil {
+		return n1 + n2, nil
+	}
 	rows, err := db.conn.Query("SELECT id, url FROM frontier")
 	if err != nil {
 		return n1 + n2, err
@@ -378,7 +380,7 @@ func (db *DB) PruneFrontier() (int64, error) {
 		var id int64
 		var u string
 		rows.Scan(&id, &u)
-		if isNonContentURL(u) || isWikimediaURL(u) {
+		if shouldBlock(u) {
 			toDelete = append(toDelete, id)
 		}
 	}
@@ -411,87 +413,29 @@ func (db *DB) PeekFrontier(limit int) ([]*FrontierEntry, error) {
 }
 
 
+// URLFilter returns true if a URL should be excluded from the frontier.
+type URLFilter func(string) bool
+
 // InsertPageWithLinks inserts a page and its outgoing links in one call.
-// Outbound links go to the frontier for discovery, but wiki→wiki links are
-// skipped to prevent unbounded crawl depth into Wikipedia.
-func (db *DB) InsertPageWithLinks(p *Page, links []string) (int64, error) {
+// Outbound links go to the frontier for discovery, filtered by the provided function.
+func (db *DB) InsertPageWithLinks(p *Page, links []string, shouldBlock URLFilter) (int64, error) {
 	pageID, err := db.InsertPage(p)
 	if err != nil {
 		return 0, err
 	}
 
-	sourceIsWiki := isWikimediaURL(p.URL)
 	for _, targetURL := range links {
 		target, _ := db.GetPageByURL(targetURL)
 		if target != nil {
 			db.InsertLink(pageID, target.ID, "")
 		}
-		// Skip frontier for: wiki→wiki, non-content domains
-		if sourceIsWiki && isWikimediaURL(targetURL) {
-			continue
-		}
-		if isNonContentURL(targetURL) {
+		if shouldBlock != nil && shouldBlock(targetURL) {
 			continue
 		}
 		db.AddToFrontier(targetURL, 0)
 	}
 
 	return pageID, nil
-}
-
-// Domains that never contain indexable copyleft content.
-// Includes platforms (ToS overrides), paywalls, social media, and link shorteners.
-var frontierBlockedDomains = map[string]bool{
-	// Social / platforms
-	"amazon.com": true, "youtube.com": true, "github.com": true,
-	"twitter.com": true, "x.com": true, "facebook.com": true,
-	"reddit.com": true, "linkedin.com": true, "instagram.com": true,
-	"medium.com": true, "substack.com": true, "lesswrong.com": true,
-	"news.ycombinator.com": true,
-	// Paywalls / all-rights-reserved
-	"nytimes.com": true, "wsj.com": true, "economist.com": true,
-	"nature.com": true, "sciencedirect.com": true, "springer.com": true,
-	"wiley.com": true, "jstor.org": true, "acm.org": true, "ieee.org": true,
-	// Link indirection / not content
-	"doi.org": true, "dx.doi.org": true, "archive.org": true,
-	"web.archive.org": true, "google.com": true, "t.co": true,
-	"bit.ly": true, "tinyurl.com": true,
-	// Misc noise discovered in frontier
-	"ncbi.nlm.nih.gov": true, "predictionbook.com": true,
-	"uptontea.com": true,
-}
-
-func isNonContentURL(rawURL string) bool {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return true
-	}
-	h := strings.ToLower(u.Hostname())
-	if strings.HasPrefix(h, "www.") {
-		h = h[4:]
-	}
-	if frontierBlockedDomains[h] {
-		return true
-	}
-	// Check parent domains (e.g., ncbi.nlm.nih.gov matches nih.gov)
-	for d := range frontierBlockedDomains {
-		if strings.HasSuffix(h, "."+d) {
-			return true
-		}
-	}
-	return false
-}
-
-func isWikimediaURL(rawURL string) bool {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	h := strings.ToLower(u.Hostname())
-	return strings.HasSuffix(h, ".wikipedia.org") ||
-		strings.HasSuffix(h, ".wikibooks.org") ||
-		strings.HasSuffix(h, ".wikisource.org") ||
-		strings.HasSuffix(h, ".wikimedia.org")
 }
 
 // --- Chunks ---
