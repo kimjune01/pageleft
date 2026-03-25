@@ -60,7 +60,15 @@ The crawl pipe maps to the six-stage pipeline from the [parts bin](https://june.
   - URLs linked from multiple indexed pages: priority = inbound count
   - Everything else: priority 1
 - `GET /api/frontier` returns `ORDER BY priority DESC, id ASC`. Workers drain highest-priority first.
-- Parts bin: this is the Attend stage operating on a flat data structure — MMR or simple ranking by composite score. No need for MCTS or beam search at this scale.
+- Algorithm: **weighted composite score** (parts bin: Attend × flat → MMR). Three signals, one score:
+  ```
+  priority = w_license * copyleft_known + w_links * log(1 + inbound_count) + w_novelty * (1 - max_sim_to_index)
+  ```
+  - `copyleft_known`: 1 if domain is in `copyleft_domains.txt`, 0 otherwise. Avoids wasting crawl budget on pages that will fail license verification.
+  - `inbound_count`: how many indexed pages link to this URL. Pages linked from multiple sources are more likely authoritative. Log-scaled so one heavily-linked page doesn't dominate.
+  - `max_sim_to_index` (optional, deferred): cosine similarity of URL's domain centroid to existing coverage. Prioritizes domains that fill gaps in the index. Requires page embeddings per domain — revisit when the index has 10K+ pages across 100+ domains.
+  - Start with `w_license=10, w_links=1, w_novelty=0`. Tune after observing crawl yield (fraction of frontier URLs that pass license verification and produce chunks).
+- At 32K entries this is a flat scan on read — no index needed. At 100K+, add a B-tree index on `priority` (parts bin: Cache × sequence → B-tree).
 
 **Later: Consolidate** (recrawl + freshness)
 - Push stale pages back onto the frontier, sorted by oldest `crawled_at`. Same fetch pipeline, different seed. One mechanism handles freshness, invalidation, and tombstoning:
@@ -71,7 +79,12 @@ The crawl pipe maps to the six-stage pipeline from the [parts bin](https://june.
   - 5xx → do nothing, server might be temporarily down
   - Conditional GET (`ETag`, `Last-Modified`) to skip unchanged pages cheaply
 - Freshness as ranking signal: multiply rank by decay factor based on `crawled_at` staleness. Recently verified pages rank higher.
-- Parts bin: this is Consolidate reading from Remember (review timestamps, crawl outcomes) and writing parameter changes (decay multipliers, priority updates). Biology's scheduler is sleep; PageLeft's is a cron job.
+- Algorithm: **exponential decay + EMA convergence gate** (parts bin: Consolidate × flat → EMA convergence gate).
+  - Each page has a `freshness` score: `exp(-λ * days_since_crawl)`. λ chosen so freshness halves every 90 days.
+  - Final search rank multiplied by freshness. A page crawled yesterday has freshness ≈ 1.0; one crawled a year ago ≈ 0.06.
+  - Recrawl priority = `(1 - freshness) * pagerank`. High-authority stale pages recrawl first. Low-authority stale pages recrawl last or never.
+  - Convergence gate: if a page's `content_hash` hasn't changed across N consecutive recrawls, extend its recrawl interval exponentially (1 week → 2 weeks → 1 month → 3 months). Stable pages don't need frequent checking. Parts bin: this is EMA applied to change frequency — the recrawl interval converges to the page's actual update rate.
+  - Implementation: add `last_crawled_at`, `recrawl_interval`, `consecutive_unchanged` columns to pages. A cron job (or `pageleft recrawl` command) queries pages where `now - last_crawled_at > recrawl_interval`, pushes them to the frontier with priority based on recrawl urgency.
 
 **Other improvements**:
 - Domain blocklist expansion: [UT1 blacklists](https://dsi.ut-capitole.fr/blacklists/) (CC BY-SA). Flat lookup, zero inference cost.
