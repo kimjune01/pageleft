@@ -2,7 +2,7 @@
 
 What exists, what's next, and what's blocked.
 
-PageLeft is a store and a search pipe. It serves one use case: semantic search over copyleft-licensed pages, with attribution intact. Crawl, embed, quality review, and link analysis are separate pipes that write to PageLeft's store. They ship in the same binary but have independent goals and timescales.
+PageLeft is a search engine for ideas that chose to be free. Semantic search over copyleft-licensed pages, with attribution intact. Crawl, embed, quality, and link analysis are separate pipes that write to PageLeft's store via the API.
 
 ## The search pipe
 
@@ -12,23 +12,22 @@ PageLeft is a store and a search pipe. It serves one use case: semantic search o
 
 - Semantic search over copyleft-licensed pages (CC BY-SA, AGPL, GPL, etc.)
 - Per-paragraph chunk embeddings (BGE-small-en-v1.5, 384D)
-- PageRank from inter-page link graph (1,179 links across 324 pages)
+- PageRank from inter-page link graph
 - Compilable flag: 2x ranking boost, `&compiles` search filter
-- DPP diversity reranker: overfetch 5x, greedy selection balancing relevance and diversity
+- DPP reranker in embedding space: overfetch 5x, greedy selection maximizing `relevance * (1 - maxSim)`. Surfaces pages adjacent to existing results but not redundant — original ideas near known ones, not distant noise. Handles diversity, novelty, and originality at search time with one mechanism.
 - Snippet highlighting: return the matching chunk text with query terms bolded
 
 ### Open problems
 
 - **Score balancing**: final rank is `semantic * pagerank * quality * compilable_boost`. The relative weight between semantic similarity and PageRank is implicit, not tuned. No evaluation set exists yet. Prescription: Consolidate from the [parts bin](https://june.kim/the-parts-bin) — collect implicit feedback, fit a learning-to-rank model, update the weight vector.
-- **Default breadth, opt-in specificity**: PageLeft's value is the unexpected juxtaposition — a query about "composition" returns category theory, SICP, the Appointments Clause, and Peirce. Every other search engine optimizes for specificity. PageLeft's default should optimize for breadth across the canon. Replace DPP with xQuAD ([parts bin](https://june.kim/the-parts-bin): Attend × top_k_slate × explicit) using source domain as the subtopic axis. Maximize coverage across domains first, relevance second. Semantic specificity is opt-in via `&semantic` filter for users who want the 10 most similar paragraphs instead.
-- **Storage**: SQLite with JSON arrays for embeddings. Linear scan works at 324 pages. Estimated ~50K pages before needing ANN. Candidates: [fogfish/hnsw](https://github.com/fogfish/hnsw) or [TFMV/hnsw](https://github.com/TFMV/hnsw) (both MIT, pure Go).
+- **Storage**: SQLite with JSON arrays for embeddings. Linear scan works at ~1,600 pages. Estimated ~50K pages before needing ANN. Candidates: [fogfish/hnsw](https://github.com/fogfish/hnsw) or [TFMV/hnsw](https://github.com/TFMV/hnsw) (both MIT, pure Go).
 - **Compilation mode**: the compilable flag is currently a boolean (page has a reference implementation or it doesn't). Two compilation modes exist: **artifact** (page compiles into code, visualization, simulation) and **judgment** (loading page into context improves agent output on domain-specific tasks). Extend the schema from `compilable bool` to `compilation_mode text` (`artifact`, `judgment`, or null). Search filter `&compiles` matches either mode. New filter `&compiles=artifact` or `&compiles=judgment` for mode-specific queries. See [public-domain.md](public-domain.md) for the criteria and [Theory Is Load-Bearing](https://june.kim/theory-is-load-bearing) for the evidence that judgment-mode compilation is real.
 
 ## Supporting pipes
 
 Crawl and embed run on federated workers — PageLeft serves the work queue and accepts results but doesn't incur the compute. Quality reviews and link analysis also run externally. Each pipe has its own goal and writes to PageLeft's store via the API.
 
-At current scale (324 pages, 0 reviews), I am Attend and Consolidate. I review pages, tune ranking weights, and decide crawl priorities by hand. The supporting pipes automate Perceive through Filter. Automating Attend and Consolidate waits for enough data to justify it.
+At current scale (~1,600 pages), I am Attend and Consolidate. I review pages, tune ranking weights, and decide crawl priorities by hand. The supporting pipes automate Perceive through Filter. Automating Attend and Consolidate waits for enough data to justify it.
 
 ### Crawl pipe
 
@@ -63,19 +62,21 @@ At current scale (324 pages, 0 reviews), I am Attend and Consolidate. I review p
 
 ### Quality pipe
 
-**Goal**: separate signal from noise so the search pipe ranks good pages above bad ones.
+**Goal**: set the structural floor so pages without substance don't pollute search results.
 
-**Done**: compounding quality scores, random sampling, quality_coverage metric, anonymous contributor leaderboard.
+Quality is not a page-level score that an LLM assigns. Originality, novelty, and diversity are relational — they depend on what else is in the result set. DPP handles all three at search time. The quality pipe's job is narrower: gate out pages that have no substance at all (photos, nav junk, empty shells). The structural heuristic scorer does this without LLM calls.
+
+**Done**:
+- Structural heuristic scorer (`rank-agg-v1`): code fences, equations, citations, headings, domain tier. Rank aggregation produces 0-1 scores. Cold start complete — 1,598 pages scored.
+- Compounding quality scores (geometric mean), random sampling, quality_coverage metric, anonymous contributor leaderboard.
+- Worker client (`quality_scorer.py`): pulls from `/api/work/quality`, scores, submits.
 
 **Next**:
-- Cold start: 324 pages, 0 reviews. Seed quality reviews with a local model.
-- Worker client: reference script that pulls from `/api/work/*`, runs a model, submits results.
-
-**Later**:
 - Time-decayed quality: a 0.9 review from six months ago weighs less than a 0.7 from today. Decay is a Consolidate operation — read review timestamps, write decayed scores. See [parts bin Consolidate catalog](https://june.kim/the-parts-bin#catalog).
-- Competitive inhibition at index time: when a new chunk lands near an existing chunk (cosine > threshold), compare on decayed quality. Winner stays, loser evicted. Requires decayed quality scores to exist first. See [The Handshake](https://june.kim/the-handshake) competitive core.
 
 **Open**: review gaming — random sampling and dedup prevent naive Sybil attacks. Coordinated attackers can still inflate scores.
+
+**Not planned**: LLM-based quality scoring. Subjective rubrics are exploit surfaces (see [slop-detection](https://june.kim/slop-detection)). Structural heuristics set the floor; DPP handles the rest at search time.
 
 ### Link pipe
 
@@ -83,7 +84,7 @@ At current scale (324 pages, 0 reviews), I am Attend and Consolidate. I review p
 
 **Done**: link extraction, iterative PageRank (damping=0.85, 50 iterations).
 
-**Open**: network bias — PageRank favors well-linked authors. A brilliant page with no inbound links ranks poorly. Semantic score partially compensates, but the bias is structural.
+**Open**: network bias — PageRank favors well-linked authors. A brilliant page with no inbound links ranks poorly. DPP in embedding space partially compensates — an unlinked page with a novel idea still gets selected for diversity. But the bias is structural.
 
 ### Feed reader pipe (not started)
 
@@ -103,3 +104,4 @@ Pages that don't contribute to provenance or quality decay quietly. Redundant ch
 - **Accounts / auth**: contributions are anonymous by design.
 - **Moderation dashboard**: quality scores compound. Low-quality pages sink.
 - **Popularity-based eviction**: PageLeft keeps what others won't cite.
+- **LLM quality axes**: subjective, prompt-relative, and gameable. See [slop-detection](https://june.kim/slop-detection).

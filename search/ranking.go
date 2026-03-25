@@ -2,9 +2,7 @@ package search
 
 import (
 	"math"
-	"net/url"
 	"sort"
-	"strings"
 
 	"github.com/kimjune01/pageleft/platform"
 )
@@ -62,7 +60,7 @@ func Search(pages []*platform.Page, queryEmb []float64, limit int) []Result {
 	if pool > 0 && len(results) > pool {
 		results = results[:pool]
 	}
-	results = xquadRerank(results, limit)
+	results = dppRerank(results, limit)
 
 	return results
 }
@@ -132,88 +130,15 @@ func SearchChunks(chunks []platform.ChunkWithPage, queryEmb []float64, totalPage
 	if pool > 0 && len(results) > pool {
 		results = results[:pool]
 	}
-	results = xquadRerank(results, limit)
+	results = dppRerank(results, limit)
 
 	return results
 }
 
-// extractDomain returns a normalized domain for grouping.
-// Collapses subdomains: math.libretexts.org → libretexts.org,
-// louis.pressbooks.pub → pressbooks.pub.
-func extractDomain(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return ""
-	}
-	host := strings.ToLower(u.Hostname())
-	host = strings.TrimPrefix(host, "www.")
-
-	// Collapse known subdomain patterns to parent
-	parts := strings.Split(host, ".")
-	if len(parts) >= 3 {
-		parent := strings.Join(parts[len(parts)-2:], ".")
-		// Known platforms where subdomains are different institutions, not different content
-		switch parent {
-		case "libretexts.org", "pressbooks.pub":
-			return parent
-		}
-	}
-	return host
-}
-
-// xquadRerank diversifies results by source domain.
-// At each step, picks the candidate that maximizes:
-//
-//	(1-λ) * relevance + λ * coverage_gain
-//
-// where coverage_gain = 1 if the candidate's domain is not yet represented, 0 otherwise.
-// λ = 0.6 favors breadth over specificity (PageLeft's default).
-func xquadRerank(candidates []Result, k int) []Result {
-	if len(candidates) <= k || k <= 0 {
-		return candidates
-	}
-
-	const lambda = 0.6
-
-	selected := make([]Result, 0, k)
-	used := make(map[int]bool)
-	coveredDomains := make(map[string]bool)
-
-	for len(selected) < k {
-		bestIdx := -1
-		bestScore := -1.0
-
-		for i, c := range candidates {
-			if used[i] {
-				continue
-			}
-			domain := extractDomain(c.Page.URL)
-			coverageGain := 0.0
-			if !coveredDomains[domain] {
-				coverageGain = 1.0
-			}
-			score := (1-lambda)*c.FinalScore + lambda*coverageGain
-			if score > bestScore {
-				bestScore = score
-				bestIdx = i
-			}
-		}
-
-		if bestIdx < 0 {
-			break
-		}
-
-		selected = append(selected, candidates[bestIdx])
-		used[bestIdx] = true
-		coveredDomains[extractDomain(candidates[bestIdx].Page.URL)] = true
-	}
-
-	return selected
-}
-
-// dppRerank uses greedy DPP selection to pick a diverse subset.
-// Each step picks the item that maximizes: relevance² * det(similarity kernel).
-// Greedy approximation: pick the item with the best marginal gain at each step.
+// dppRerank selects a diverse subset using greedy DPP in embedding space.
+// At each step, picks the candidate that maximizes: relevance * (1 - maxSim).
+// Pages adjacent to selected results but not redundant score highest —
+// this surfaces original ideas near existing ones, not distant noise.
 func dppRerank(candidates []Result, k int) []Result {
 	if len(candidates) <= k || k <= 0 {
 		return candidates
