@@ -11,15 +11,17 @@ PageLeft is a search engine for ideas that chose to be free. Semantic search ove
 ### Done
 
 - Semantic search over copyleft-licensed pages (CC BY-SA, AGPL, GPL, etc.)
-- Per-paragraph chunk embeddings (BGE-small-en-v1.5, 384D)
+- Per-paragraph chunk embeddings (BGE-small-en-v1.5, 384D) with 50-char minimum to filter nav fragments
+- BGE query prefix: `EmbedQuery()` prepends the retrieval instruction BGE expects, widening score discrimination from stdev 0.03 to 0.07
 - PageRank from inter-page link graph
 - Compilable flag: 2x ranking boost, `&compiles` search filter
-- DPP reranker in embedding space: overfetch 5x, greedy selection maximizing `relevance * (1 - maxSim)`. Surfaces pages adjacent to existing results but not redundant — original ideas near known ones, not distant noise. Handles diversity, novelty, and originality at search time with one mechanism.
+- Source-diverse DPP reranker: overfetch 5x, greedy selection using `Similarity * (floor + (1 - floor) * (1 - maxSim))`. Same-domain candidates get a 0.3 similarity penalty, spreading results across sources. Relevance floor at 0.7 prevents diversity from burying highly relevant results. One kernel handles embedding diversity, source diversity, and relevance preservation.
 - Snippet highlighting: return the matching chunk text with query terms bolded
+- Version tracking: git SHA embedded via ldflags, `pageleft version` command, exposed in `/api/stats`
 
 ### Open problems
 
-- **Score balancing**: final rank is `semantic * pagerank * quality * compilable_boost`. The relative weight between semantic similarity and PageRank is implicit, not tuned. No evaluation set exists yet. Prescription: Consolidate from the [parts bin](https://june.kim/the-parts-bin) — collect implicit feedback, fit a learning-to-rank model, update the weight vector.
+- **Score balancing**: final rank is `semantic * (1 + log(1 + rank * n)) * quality * compilable_boost`. The relative weight between semantic similarity and PageRank is implicit, not tuned. No evaluation set exists yet. Prescription: Consolidate from the [parts bin](https://june.kim/the-parts-bin) — collect implicit feedback, fit a learning-to-rank model, update the weight vector.
 - **Storage**: SQLite with JSON arrays for embeddings. Linear scan works at ~1,600 pages. Estimated ~50K pages before needing ANN. Candidates: [fogfish/hnsw](https://github.com/fogfish/hnsw) or [TFMV/hnsw](https://github.com/TFMV/hnsw) (both MIT, pure Go).
 - **Compilation mode**: the compilable flag is currently a boolean (page has a reference implementation or it doesn't). Two compilation modes exist: **artifact** (page compiles into code, visualization, simulation) and **judgment** (loading page into context improves agent output on domain-specific tasks). Extend the schema from `compilable bool` to `compilation_mode text` (`artifact`, `judgment`, or null). Search filter `&compiles` matches either mode. New filter `&compiles=artifact` or `&compiles=judgment` for mode-specific queries. See [public-domain.md](public-domain.md) for the criteria and [Theory Is Load-Bearing](https://june.kim/theory-is-load-bearing) for the evidence that judgment-mode compilation is real.
 
@@ -33,7 +35,7 @@ At current scale (~1,600 pages), I am Attend and Consolidate. I review pages, tu
 
 **Goal**: grow the index with new copyleft-licensed pages.
 
-**Done**: federated work queues, robots.txt, license detection via `<meta>` tags.
+**Done**: federated work queues, robots.txt, license detection via `<meta>` tags and `dc.rights`. Wikipedia/Wikimedia fetched via REST API (`/api/rest_v1/page/html/`). Wiki→wiki links excluded from frontier (depth-1 crawl policy).
 
 **Next**:
 - Domain blocklist: [UT1 blacklists](https://dsi.ut-capitole.fr/blacklists/) (CC BY-SA). Flat lookup, zero inference cost.
@@ -58,9 +60,7 @@ At current scale (~1,600 pages), I am Attend and Consolidate. I review pages, tu
 **Next**:
 - Embedding invalidation handled by recrawl-via-frontier (see crawl pipe above). When `content_hash` changes, old chunk embeddings are nulled and new chunks enter the work queue. This is a Remember → Perceive handshake break — stale embeddings violate the contract. See [The Handshake](https://june.kim/the-handshake).
 
-**Later**:
-- Multi-model embeddings — accept vectors from different models, normalize to a common similarity space.
-- Search score discrimination — semantic scores cluster in a narrow band (0.6–0.7), making ranking insensitive to query relevance. Needs an eval set before tuning. Related to score balancing in the search pipe.
+**Later**: multi-model embeddings — accept vectors from different models, normalize to a common similarity space.
 
 ### Quality pipe
 
