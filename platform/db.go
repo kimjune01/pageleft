@@ -3,20 +3,98 @@ package platform
 import (
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"math/rand"
+	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
 
 type DB struct {
-	conn *sql.DB
+	conn      *sql.DB
+	urlBloom  *urlBloomFilter
+	bloomPath string
+}
+
+const (
+	urlBloomM = 14_400_000 // bits — optimal for 1M URLs at 0.1% FPR
+	urlBloomK = 10         // hash functions
+)
+
+// urlBloomFilter is a persistent probabilistic set for URL dedup.
+// Sized for 1M URLs at 0.1% FPR (~1.8 MB on disk).
+type urlBloomFilter struct {
+	bits []uint64
+	mu   sync.RWMutex
+}
+
+func newURLBloomFilter() *urlBloomFilter {
+	return &urlBloomFilter{bits: make([]uint64, (urlBloomM+63)/64)}
+}
+
+func (bf *urlBloomFilter) add(item string) {
+	h1, h2 := urlBloomHashes(item)
+	bf.mu.Lock()
+	for i := 0; i < urlBloomK; i++ {
+		pos := (h1 + uint64(i)*h2) % urlBloomM
+		bf.bits[pos/64] |= 1 << (pos % 64)
+	}
+	bf.mu.Unlock()
+}
+
+func (bf *urlBloomFilter) contains(item string) bool {
+	h1, h2 := urlBloomHashes(item)
+	bf.mu.RLock()
+	defer bf.mu.RUnlock()
+	for i := 0; i < urlBloomK; i++ {
+		pos := (h1 + uint64(i)*h2) % urlBloomM
+		if bf.bits[pos/64]&(1<<(pos%64)) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func urlBloomHashes(s string) (uint64, uint64) {
+	h := fnv.New64a()
+	h.Write([]byte(s))
+	h1 := h.Sum64()
+	h2 := fnv.New64()
+	h2.Write([]byte(s))
+	return h1, h2.Sum64()
+}
+
+func loadURLBloom(path string) *urlBloomFilter {
+	data, err := os.ReadFile(path)
+	if err == nil && len(data) == (urlBloomM+63)/64*8 {
+		bf := newURLBloomFilter()
+		for i := range bf.bits {
+			bf.bits[i] = binary.LittleEndian.Uint64(data[i*8:])
+		}
+		return bf
+	}
+	return newURLBloomFilter()
+}
+
+func (bf *urlBloomFilter) save(path string) error {
+	bf.mu.RLock()
+	defer bf.mu.RUnlock()
+	data := make([]byte, len(bf.bits)*8)
+	for i, v := range bf.bits {
+		binary.LittleEndian.PutUint64(data[i*8:], v)
+	}
+	return os.WriteFile(path, data, 0644)
 }
 
 type Page struct {
@@ -76,14 +154,56 @@ func NewDB(path string) (*DB, error) {
 	if err := conn.Ping(); err != nil {
 		return nil, fmt.Errorf("ping db: %w", err)
 	}
-	db := &DB{conn: conn}
+	bloomPath := filepath.Join(filepath.Dir(path), "url-seen.bloom")
+	db := &DB{conn: conn, bloomPath: bloomPath}
 	if err := db.migrate(); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	db.initURLBloom()
 	return db, nil
 }
 
+// initURLBloom loads the persistent bloom filter, or seeds from DB if missing.
+func (db *DB) initURLBloom() {
+	db.urlBloom = loadURLBloom(db.bloomPath)
+	// Check if the filter was loaded from disk (non-empty) or needs seeding.
+	empty := true
+	for _, w := range db.urlBloom.bits {
+		if w != 0 {
+			empty = false
+			break
+		}
+	}
+	if !empty {
+		return // loaded from disk
+	}
+	// First run or missing file: seed from DB.
+	for _, table := range []string{"pages", "frontier"} {
+		rows, err := db.conn.Query("SELECT url FROM " + table)
+		if err != nil {
+			continue
+		}
+		for rows.Next() {
+			var u string
+			rows.Scan(&u)
+			db.urlBloom.add(NormalizeURL(u))
+		}
+		rows.Close()
+	}
+	db.urlBloom.save(db.bloomPath)
+}
+
+// SaveURLBloom persists the URL bloom filter to disk. Call periodically
+// or on graceful shutdown to avoid re-seeding from DB on next startup.
+func (db *DB) SaveURLBloom() error {
+	if db.urlBloom == nil {
+		return nil
+	}
+	return db.urlBloom.save(db.bloomPath)
+}
+
 func (db *DB) Close() error {
+	db.SaveURLBloom()
 	return db.conn.Close()
 }
 
@@ -320,15 +440,38 @@ func (db *DB) AddToFrontier(rawURL string, depth int) error {
 	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
 		return nil
 	}
-	existing, _ := db.GetPageByURL(rawURL)
-	if existing != nil {
+	normalized := NormalizeURL(rawURL)
+	if normalized == "" {
 		return nil
 	}
+	// Bloom filter: fast probabilistic check avoids DB round-trip.
+	// False positives cause us to skip a URL we haven't seen — acceptable
+	// at 0.1% FPR. False negatives are impossible.
+	if db.urlBloom.contains(normalized) {
+		return nil
+	}
+	db.urlBloom.add(normalized)
 	_, err := db.conn.Exec(`
 		INSERT INTO frontier (url, depth, inbound) VALUES (?, ?, 1)
 		ON CONFLICT(url) DO UPDATE SET inbound = inbound + 1`,
-		rawURL, depth)
+		normalized, depth)
 	return err
+}
+
+// NormalizeURL canonicalizes a URL: strips fragment, trailing slash,
+// and upgrades http to https for dedup consistency.
+func NormalizeURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	u.Fragment = ""
+	u.Path = strings.TrimRight(u.Path, "/")
+	// Canonical scheme: treat http and https as the same page.
+	if u.Scheme == "http" {
+		u.Scheme = "https"
+	}
+	return u.String()
 }
 
 func (db *DB) PopFrontier(limit int) ([]*FrontierEntry, error) {
@@ -389,6 +532,11 @@ func (db *DB) PruneFrontier(shouldBlock URLFilter) (int64, error) {
 // PeekFrontier returns frontier entries without removing them.
 func (db *DB) PeekFrontier(limit int) ([]*FrontierEntry, error) {
 	return db.scoredFrontier(limit)
+}
+
+// DeleteFrontierURL removes a URL from the frontier (e.g., after rejection).
+func (db *DB) DeleteFrontierURL(rawURL string) {
+	db.conn.Exec("DELETE FROM frontier WHERE url = ?", rawURL)
 }
 
 // scoredFrontier fetches frontier entries, overfetches 3x, scores with

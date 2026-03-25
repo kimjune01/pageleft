@@ -32,7 +32,7 @@ func (h *Handler) handleFrontier(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	entries, err := h.db.PeekFrontier(limit)
+	entries, err := h.db.PopFrontier(limit)
 	if err != nil {
 		http.Error(w, `{"error":"database error"}`, http.StatusInternalServerError)
 		return
@@ -95,6 +95,8 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(err.Error(), "no copyleft license found") {
 			crawler.LearnNonPermissive(sub.URL)
 		}
+		// Remove from frontier so rejected URLs don't cycle forever.
+		h.db.DeleteFrontierURL(sub.URL)
 		http.Error(w, fmt.Sprintf(`{"error":"license verification failed: %v"}`, err), http.StatusUnprocessableEntity)
 		return
 	}
