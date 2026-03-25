@@ -89,6 +89,12 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 	result, err := fetchAndVerify(sub.URL)
 	if err != nil {
 		log.Printf("license verification failed for %s: %v", sub.URL, err)
+		// Only learn non-permissive if the page was fetched successfully but
+		// had no copyleft or public domain license. Transient errors (403,
+		// 500, timeout) are not evidence — only "no license found" is.
+		if strings.Contains(err.Error(), "no copyleft license found") {
+			crawler.LearnNonPermissive(sub.URL)
+		}
 		http.Error(w, fmt.Sprintf(`{"error":"license verification failed: %v"}`, err), http.StatusUnprocessableEntity)
 		return
 	}

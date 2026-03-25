@@ -109,6 +109,13 @@ func cmdServe(dbPath string) {
 	}
 	defer db.Close()
 
+	// Init Bloom filter in the same directory as the DB
+	dbDir := "."
+	if idx := strings.LastIndex(dbPath, "/"); idx >= 0 {
+		dbDir = dbPath[:idx]
+	}
+	crawler.InitBloomFilter(dbDir)
+
 	embedder := platform.NewEmbedder()
 	h := handler.New(db, embedder, Version)
 
