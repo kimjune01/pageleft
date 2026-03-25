@@ -27,11 +27,12 @@ var forgeClient = &http.Client{Timeout: 15 * time.Second}
 func resolveForge(pageURL, owner, repo string) Resolution {
 	host := ExtractDomain(pageURL)
 
-	var spdx, licenseURL string
+	var spdx, licenseURL, branch string
 	if host == "github.com" {
 		spdx, licenseURL = githubLicense(owner, repo)
+		branch = "HEAD"
 	} else {
-		spdx, licenseURL = codebergLicense(owner, repo)
+		spdx, licenseURL, branch = codebergLicenseFull(owner, repo)
 	}
 
 	if spdx == "" || !copyleftSPDX[spdx] {
@@ -43,7 +44,7 @@ func resolveForge(pageURL, owner, repo string) Resolution {
 	if host == "github.com" {
 		fetchURL = fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/HEAD/README.md", owner, repo)
 	} else {
-		fetchURL = fmt.Sprintf("https://codeberg.org/%s/%s/raw/branch/main/README.md", owner, repo)
+		fetchURL = fmt.Sprintf("https://codeberg.org/%s/%s/raw/branch/%s/README.md", owner, repo, branch)
 	}
 
 	return Resolution{
@@ -78,13 +79,51 @@ func githubLicense(owner, repo string) (string, string) {
 		return result.License.SPDX, licenseURL
 	}
 
-	return detectLicenseFromFile(owner, repo)
+	return detectLicenseFromRaw(
+		fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/HEAD/", owner, repo),
+		fmt.Sprintf("https://github.com/%s/%s/blob/HEAD/", owner, repo),
+	)
 }
 
-// detectLicenseFromFile fetches the raw LICENSE/COPYING file and detects copyleft by keyword.
-func detectLicenseFromFile(owner, repo string) (string, string) {
+func codebergLicenseFull(owner, repo string) (string, string, string) {
+	apiURL := fmt.Sprintf("https://codeberg.org/api/v1/repos/%s/%s", owner, repo)
+	req, _ := http.NewRequest("GET", apiURL, nil)
+	req.Header.Set("User-Agent", RobotsUserAgent)
+	resp, err := forgeClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return "", "", "main"
+	}
+	defer resp.Body.Close()
+	var result struct {
+		License       string `json:"license"`
+		DefaultBranch string `json:"default_branch"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	branch := result.DefaultBranch
+	if branch == "" {
+		branch = "main"
+	}
+
+	if result.License != "" && result.License != "NONE" && copyleftSPDX[result.License] {
+		return result.License, fmt.Sprintf("https://codeberg.org/%s/%s", owner, repo), branch
+	}
+
+	// Fallback: fetch raw LICENSE file using the actual default branch
+	spdx, licURL := detectLicenseFromRaw(
+		fmt.Sprintf("https://codeberg.org/%s/%s/raw/branch/%s/", owner, repo, branch),
+		fmt.Sprintf("https://codeberg.org/%s/%s/src/branch/%s/", owner, repo, branch),
+	)
+	return spdx, licURL, branch
+}
+
+// detectLicenseFromRaw tries to fetch LICENSE files from a raw base URL.
+func detectLicenseFromRaw(rawBase, browseBase string) (string, string) {
 	for _, filename := range []string{"LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"} {
-		rawURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/HEAD/%s", owner, repo, filename)
+		rawURL := rawBase + filename
 		req, _ := http.NewRequest("GET", rawURL, nil)
 		req.Header.Set("User-Agent", RobotsUserAgent)
 		resp, err := forgeClient.Do(req)
@@ -96,53 +135,42 @@ func detectLicenseFromFile(owner, repo string) (string, string) {
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		resp.Body.Close()
-		text := strings.ToLower(string(body))
 
-		licenseURL := fmt.Sprintf("https://github.com/%s/%s/blob/HEAD/%s", owner, repo, filename)
-		if strings.Contains(text, "gnu affero general public license") {
-			return "AGPL-3.0", licenseURL
+		spdx := matchLicenseText(string(body))
+		if spdx != "" {
+			return spdx, browseBase + filename
 		}
-		if strings.Contains(text, "gnu general public license") {
-			if strings.Contains(text, "version 3") {
-				return "GPL-3.0", licenseURL
-			}
-			return "GPL-2.0", licenseURL
-		}
-		if strings.Contains(text, "gnu lesser general public license") {
-			return "LGPL-2.1", licenseURL
-		}
-		if strings.Contains(text, "mozilla public license") {
-			return "MPL-2.0", licenseURL
-		}
-		if strings.Contains(text, "creative commons") && strings.Contains(text, "sharealike") {
-			return "CC-BY-SA-4.0", licenseURL
-		}
-		if strings.Contains(text, "creative commons") && strings.Contains(text, "cc0") {
-			return "CC0-1.0", licenseURL
-		}
-		if strings.Contains(text, "unlicense") || strings.Contains(text, "public domain") {
-			return "Unlicense", licenseURL
-		}
-		return "", ""
+		return "", "" // found a file but not copyleft
 	}
 	return "", ""
 }
 
-func codebergLicense(owner, repo string) (string, string) {
-	apiURL := fmt.Sprintf("https://codeberg.org/api/v1/repos/%s/%s", owner, repo)
-	req, _ := http.NewRequest("GET", apiURL, nil)
-	req.Header.Set("User-Agent", RobotsUserAgent)
-	resp, err := forgeClient.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		if resp != nil {
-			resp.Body.Close()
+// matchLicenseText detects copyleft/public domain licenses by keyword.
+func matchLicenseText(raw string) string {
+	text := strings.ToLower(raw)
+	if strings.Contains(text, "gnu affero general public license") {
+		return "AGPL-3.0"
+	}
+	if strings.Contains(text, "gnu general public license") {
+		if strings.Contains(text, "version 3") {
+			return "GPL-3.0"
 		}
-		return "", ""
+		return "GPL-2.0"
 	}
-	defer resp.Body.Close()
-	var result struct {
-		License string `json:"license"`
+	if strings.Contains(text, "gnu lesser general public license") {
+		return "LGPL-2.1"
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
-	return result.License, fmt.Sprintf("https://codeberg.org/%s/%s", owner, repo)
+	if strings.Contains(text, "mozilla public license") {
+		return "MPL-2.0"
+	}
+	if strings.Contains(text, "creative commons") && strings.Contains(text, "sharealike") {
+		return "CC-BY-SA-4.0"
+	}
+	if strings.Contains(text, "creative commons") && strings.Contains(text, "cc0") {
+		return "CC0-1.0"
+	}
+	if strings.Contains(text, "unlicense") || (strings.Contains(text, "public domain") && !strings.Contains(text, "not public domain")) {
+		return "Unlicense"
+	}
+	return ""
 }
