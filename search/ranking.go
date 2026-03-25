@@ -1,3 +1,6 @@
+// Search ranking pipeline: score → pool → DPP rerank.
+// See docs/search-ranking.md for the full explanation.
+// If you change parameters or behavior here, update that doc too.
 package search
 
 import (
