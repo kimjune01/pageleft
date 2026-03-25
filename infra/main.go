@@ -123,6 +123,11 @@ UNIT
 cat > /etc/caddy/Caddyfile << 'CADDY'
 pageleft.cc {
     reverse_proxy localhost:8080
+
+    @api path /api/*
+    header @api Access-Control-Allow-Origin *
+    header @api Access-Control-Allow-Methods "GET, POST, OPTIONS"
+    header @api Access-Control-Allow-Headers "Content-Type"
 }
 
 www.pageleft.cc {
