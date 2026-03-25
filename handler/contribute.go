@@ -39,12 +39,12 @@ func (h *Handler) handleFrontier(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type frontierURL struct {
-		URL   string `json:"url"`
-		Depth int    `json:"depth"`
+		URL      string  `json:"url"`
+		Priority float64 `json:"priority"`
 	}
 	out := make([]frontierURL, len(entries))
 	for i, e := range entries {
-		out[i] = frontierURL{URL: e.URL, Depth: e.Depth}
+		out[i] = frontierURL{URL: e.URL, Priority: e.Priority}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/rand"
+	"sort"
 	"strings"
 	"time"
 
@@ -61,8 +63,10 @@ type FrontierEntry struct {
 	ID           int64
 	URL          string
 	Depth        int
+	Priority     float64
 	DiscoveredAt time.Time
 }
+
 
 func NewDB(path string) (*DB, error) {
 	conn, err := sql.Open("sqlite", path+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)")
@@ -111,6 +115,7 @@ func (db *DB) migrate() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			url TEXT UNIQUE NOT NULL,
 			depth INTEGER NOT NULL DEFAULT 0,
+			inbound INTEGER NOT NULL DEFAULT 1,
 			discovered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
 		CREATE TABLE IF NOT EXISTS chunks (
@@ -148,6 +153,8 @@ func (db *DB) migrate() error {
 	db.conn.Exec("ALTER TABLE pages ADD COLUMN quality REAL NOT NULL DEFAULT 1.0")
 	db.conn.Exec("ALTER TABLE pages ADD COLUMN compilable INTEGER NOT NULL DEFAULT 0")
 	db.conn.Exec("ALTER TABLE quality_reviews ADD COLUMN contributor TEXT NOT NULL DEFAULT ''")
+	db.conn.Exec("ALTER TABLE frontier ADD COLUMN inbound INTEGER NOT NULL DEFAULT 1")
+	db.conn.Exec("CREATE INDEX IF NOT EXISTS idx_frontier_inbound ON frontier(inbound DESC)")
 
 	return nil
 }
@@ -305,47 +312,33 @@ func (db *DB) LinkCount() (int, error) {
 
 // --- Frontier ---
 
-// AddToFrontier adds a URL to the crawl frontier if it passes basic filters:
-// not already indexed, not a non-content URL (fragments, mailto, javascript).
-// Domain-level filtering (blocked domains, wiki depth) is the caller's job.
+// AddToFrontier adds a URL to the crawl frontier if it passes basic filters.
+// Each duplicate sighting increments the inbound count. Priority is computed
+// on read as log(1 + inbound) * (1 + noise) — URLs linked from many indexed
+// pages rise; stochastic noise shuffles within tiers.
 func (db *DB) AddToFrontier(rawURL string, depth int) error {
-	// Skip non-HTTP, fragments, and obviously non-content URLs
 	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
 		return nil
 	}
-	// Skip already-indexed pages
 	existing, _ := db.GetPageByURL(rawURL)
 	if existing != nil {
 		return nil
 	}
 	_, err := db.conn.Exec(`
-		INSERT INTO frontier (url, depth) VALUES (?, ?)
-		ON CONFLICT(url) DO NOTHING`, rawURL, depth)
+		INSERT INTO frontier (url, depth, inbound) VALUES (?, ?, 1)
+		ON CONFLICT(url) DO UPDATE SET inbound = inbound + 1`,
+		rawURL, depth)
 	return err
 }
 
 func (db *DB) PopFrontier(limit int) ([]*FrontierEntry, error) {
-	rows, err := db.conn.Query("SELECT id, url, depth, discovered_at FROM frontier ORDER BY depth ASC, id ASC LIMIT ?", limit)
+	entries, err := db.scoredFrontier(limit)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var entries []*FrontierEntry
-	var ids []int64
-	for rows.Next() {
-		e := &FrontierEntry{}
-		if err := rows.Scan(&e.ID, &e.URL, &e.Depth, &e.DiscoveredAt); err != nil {
-			return nil, err
-		}
-		entries = append(entries, e)
-		ids = append(ids, e.ID)
+	for _, e := range entries {
+		db.conn.Exec("DELETE FROM frontier WHERE id = ?", e.ID)
 	}
-
-	for _, id := range ids {
-		db.conn.Exec("DELETE FROM frontier WHERE id = ?", id)
-	}
-
 	return entries, nil
 }
 
@@ -395,21 +388,45 @@ func (db *DB) PruneFrontier(shouldBlock URLFilter) (int64, error) {
 
 // PeekFrontier returns frontier entries without removing them.
 func (db *DB) PeekFrontier(limit int) ([]*FrontierEntry, error) {
-	rows, err := db.conn.Query("SELECT id, url, depth, discovered_at FROM frontier ORDER BY depth ASC, id ASC LIMIT ?", limit)
+	return db.scoredFrontier(limit)
+}
+
+// scoredFrontier fetches frontier entries, overfetches 3x, scores with
+// log(1 + inbound) * (1 + noise), sorts, and returns top `limit`.
+// The noise term shuffles entries within the same inbound tier,
+// giving exploration without overriding exploitation.
+func (db *DB) scoredFrontier(limit int) ([]*FrontierEntry, error) {
+	fetch := limit * 3
+	if fetch < 100 {
+		fetch = 100
+	}
+	rows, err := db.conn.Query(
+		"SELECT id, url, depth, inbound, discovered_at FROM frontier ORDER BY inbound DESC LIMIT ?", fetch)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var entries []*FrontierEntry
+	var pool []*FrontierEntry
 	for rows.Next() {
 		e := &FrontierEntry{}
-		if err := rows.Scan(&e.ID, &e.URL, &e.Depth, &e.DiscoveredAt); err != nil {
+		var inbound int
+		if err := rows.Scan(&e.ID, &e.URL, &e.Depth, &inbound, &e.DiscoveredAt); err != nil {
 			return nil, err
 		}
-		entries = append(entries, e)
+		noise := 1.0 + rand.Float64()*0.1
+		e.Priority = math.Log(1+float64(inbound)) * noise
+		pool = append(pool, e)
 	}
-	return entries, nil
+
+	sort.Slice(pool, func(i, j int) bool {
+		return pool[i].Priority > pool[j].Priority
+	})
+
+	if len(pool) > limit {
+		pool = pool[:limit]
+	}
+	return pool, nil
 }
 
 
