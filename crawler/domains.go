@@ -3,6 +3,8 @@ package crawler
 import (
 	"bufio"
 	"embed"
+	"fmt"
+	"os"
 	"strings"
 )
 
@@ -36,7 +38,32 @@ func init() {
 // Must be called after init with the DB path to determine storage location.
 func InitBloomFilter(dbDir string) {
 	bloomFilterPath = dbDir + "/nonpermissive.bloom"
-	NonPermissiveFilter = LoadBloomFilter(bloomFilterPath, frontierBlockedDomains, blockedDomains)
+	NonPermissiveFilter = LoadBloomFilterN(bloomFilterPath, 5_000_000, 0.001, frontierBlockedDomains, blockedDomains)
+}
+
+// SeedFromFile adds every line from a domain list file to the Bloom filter.
+// Used to import public blocklists (e.g., UT1 blacklists).
+func SeedFromFile(path string) (int, error) {
+	if NonPermissiveFilter == nil {
+		return 0, fmt.Errorf("bloom filter not initialized")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		domain := strings.TrimSpace(scanner.Text())
+		if domain != "" && !strings.HasPrefix(domain, "#") {
+			NonPermissiveFilter.Add(domain)
+			n++
+		}
+	}
+	if bloomFilterPath != "" {
+		NonPermissiveFilter.Save(bloomFilterPath)
+	}
+	return n, nil
 }
 
 func loadCopyleftDomains() map[string]DomainLicense {

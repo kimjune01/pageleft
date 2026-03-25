@@ -81,9 +81,9 @@ func (bf *BloomFilter) Save(path string) error {
 	return binary.Write(f, binary.LittleEndian, bf.bits)
 }
 
-// LoadBloomFilter reads a Bloom filter from disk, seeding from text files
-// if the file doesn't exist yet.
-func LoadBloomFilter(path string, seeds map[string]bool, moreSeeds map[string]bool) *BloomFilter {
+// LoadBloomFilterN reads a Bloom filter from disk, or creates one with
+// the given capacity and seeds if the file doesn't exist.
+func LoadBloomFilterN(path string, capacity int, fpr float64, seeds ...map[string]bool) *BloomFilter {
 	if data, err := os.ReadFile(path); err == nil && len(data) >= 8 {
 		m := int(binary.LittleEndian.Uint32(data[0:4]))
 		k := int(binary.LittleEndian.Uint32(data[4:8]))
@@ -95,13 +95,11 @@ func LoadBloomFilter(path string, seeds map[string]bool, moreSeeds map[string]bo
 			return &BloomFilter{bits: bits, k: k, m: m}
 		}
 	}
-	// File missing or corrupt — create fresh and seed
-	bf := NewBloomFilter(10000, 0.001)
-	for d := range seeds {
-		bf.Add(d)
-	}
-	for d := range moreSeeds {
-		bf.Add(d)
+	bf := NewBloomFilter(capacity, fpr)
+	for _, s := range seeds {
+		for d := range s {
+			bf.Add(d)
+		}
 	}
 	bf.Save(path)
 	return bf

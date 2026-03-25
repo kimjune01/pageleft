@@ -9,6 +9,7 @@ import (
 
 	"github.com/kimjune01/pageleft/crawler"
 	"github.com/kimjune01/pageleft/platform"
+	"github.com/kimjune01/pageleft/search"
 )
 
 type Handler struct {
@@ -21,15 +22,20 @@ type Handler struct {
 	chunkMu    sync.RWMutex
 	chunkCache []platform.ChunkWithPage
 	chunkDirty bool
+
+	// Auto-reindex: track page count at last PageRank computation.
+	lastReindexCount int
 }
 
 func New(db *platform.DB, embedder *platform.Embedder, version string) *Handler {
+	pageCount, _ := db.PageCount()
 	h := &Handler{
-		db:         db,
-		embedder:   embedder,
-		robots:     crawler.NewRobotsChecker(&http.Client{Timeout: 10 * time.Second}),
-		version:    version,
-		chunkDirty: true, // load on first search
+		db:               db,
+		embedder:         embedder,
+		robots:           crawler.NewRobotsChecker(&http.Client{Timeout: 10 * time.Second}),
+		version:          version,
+		chunkDirty:       true, // load on first search
+		lastReindexCount: pageCount,
 	}
 	return h
 }
@@ -65,6 +71,28 @@ func (h *Handler) invalidateChunkCache() {
 	h.chunkMu.Lock()
 	h.chunkDirty = true
 	h.chunkMu.Unlock()
+}
+
+// maybeReindex recomputes PageRank if page count has grown by >5% since last reindex.
+// Runs in a goroutine to avoid blocking the request.
+func (h *Handler) maybeReindex() {
+	if h.lastReindexCount < 10 {
+		return // skip during tests and fresh DBs
+	}
+	current, _ := h.db.PageCount()
+	threshold := float64(h.lastReindexCount) * 1.05
+	if float64(current) <= threshold {
+		return
+	}
+	h.lastReindexCount = current
+	go func() {
+		log.Printf("auto-reindex: page count %d > 5%% threshold, recomputing PageRank", current)
+		if err := search.ComputePageRank(h.db); err != nil {
+			log.Printf("auto-reindex failed: %v", err)
+		} else {
+			log.Printf("auto-reindex complete: %d pages", current)
+		}
+	}()
 }
 
 func (h *Handler) Mux() http.Handler {

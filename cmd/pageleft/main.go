@@ -49,6 +49,8 @@ func main() {
 		cmdEmbedBackfill(dbPath)
 	case "prune-frontier":
 		cmdPruneFrontier(dbPath)
+	case "seed-blocklist":
+		cmdSeedBlocklist(dbPath)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
@@ -372,6 +374,25 @@ func cmdPruneFrontier(dbPath string) {
 
 	after, _ := db.FrontierSize()
 	log.Printf("pruned %d entries, frontier after: %d", removed, after)
+}
+
+func cmdSeedBlocklist(dbPath string) {
+	if len(os.Args) < 3 {
+		log.Fatal("usage: pageleft seed-blocklist <domains-file>")
+	}
+	file := os.Args[2]
+
+	dbDir := "."
+	if idx := strings.LastIndex(dbPath, "/"); idx >= 0 {
+		dbDir = dbPath[:idx]
+	}
+	crawler.InitBloomFilter(dbDir)
+
+	n, err := crawler.SeedFromFile(file)
+	if err != nil {
+		log.Fatalf("seed: %v", err)
+	}
+	log.Printf("seeded %d domains into bloom filter", n)
 }
 
 func envOr(key, fallback string) string {

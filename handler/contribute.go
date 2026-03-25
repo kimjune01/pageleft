@@ -138,6 +138,7 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"insert failed"}`, http.StatusInternalServerError)
 		return
 	}
+	h.maybeReindex()
 
 	// Extract paragraphs and insert as chunks (embeddings come from the work queue).
 	var paragraphs []string
