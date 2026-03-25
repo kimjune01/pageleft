@@ -37,16 +37,38 @@ At current scale (~1,600 pages), I am Attend and Consolidate. I review pages, tu
 
 **Done**: federated work queues, robots.txt, license detection via `<meta>` tags and `dc.rights`. Wikipedia/Wikimedia fetched via REST API (`/api/rest_v1/page/html/`). Wiki→wiki links excluded from frontier (depth-1 crawl policy).
 
-**Next**:
-- Domain blocklist: [UT1 blacklists](https://dsi.ut-capitole.fr/blacklists/) (CC BY-SA). Flat lookup, zero inference cost.
-- Recrawl via frontier: push stale pages back onto the frontier, sorted by oldest `crawled_at`. Same fetch pipeline, different seed. One mechanism handles freshness, invalidation, and tombstoning:
-  - 200 + same `content_hash` → bump `last_crawled_at`, done
+#### The frontier problem
+
+The frontier has 54K URLs and no prioritization. Breakdown: 15K Wikipedia (blocked by depth-1 but not pruned), 14K gwern.net, 2.4K US Code, 1.7K LibreTexts, 900 GitHub, 700 Amazon, 480 june.kim. Most are noise. A worker calling `GET /api/frontier` gets FIFO-ordered junk — no way to know what's copyleft, what's already indexed, or what's worth crawling.
+
+The frontier should be a prioritized work queue, not a dumping ground. Three stages:
+
+**Stage 1: Filter on write** (immediate)
+- Don't add URLs to the frontier if:
+  - Already indexed (check pages table)
+  - Domain is blocked (amazon.com, youtube.com, github.com, ncbi.nlm.nih.gov)
+  - URL is a Wikipedia article and source page is also Wikipedia (already done)
+- Prune the existing frontier: delete already-indexed, blocked-domain, and duplicate entries.
+- Expected result: 54K → ~5-10K actionable URLs.
+
+**Stage 2: Prioritize on read** (next)
+- Score frontier entries by: copyleft-domain membership (known CC BY-SA domains rank highest), inbound link count from indexed pages, depth from seed.
+- `GET /api/frontier` returns the highest-priority entries, not the oldest.
+- Workers drain the highest-value URLs first.
+
+**Stage 3: Recrawl loop** (later)
+- Push stale pages back onto the frontier, sorted by oldest `crawled_at`. Same fetch pipeline, different seed. One mechanism handles freshness, invalidation, and tombstoning:
+  - 200 + same `content_hash` → bump `crawled_at`, done
   - 200 + new `content_hash` → re-chunk, null old embeddings, re-enter embed work queue
-  - 301/302 → update canonical URL, merge with existing entry at target if one exists
+  - 301/302 → update canonical URL, merge with existing entry at target
   - 4xx (after 2-3 consecutive failures) → null embeddings (drops from search), keep page row (prevents re-indexing dead URL)
   - 5xx → do nothing, server might be temporarily down
   - Conditional GET (`ETag`, `Last-Modified`) to skip unchanged pages cheaply
-- Freshness as ranking signal: multiply rank by decay factor based on `last_crawled_at` staleness. Recently verified pages rank higher. Incentivizes draining the recrawl queue.
+- Freshness as ranking signal: multiply rank by decay factor based on `crawled_at` staleness. Recently verified pages rank higher. Incentivizes draining the recrawl queue.
+
+#### Other crawl improvements
+
+- Domain blocklist: [UT1 blacklists](https://dsi.ut-capitole.fr/blacklists/) (CC BY-SA). Flat lookup, zero inference cost.
 - Crawl discovery: accept sitemap.xml and RSS feeds as seed sources.
 
 **Open**: license detection misses prose/footer declarations. False negatives are safe; false positives are not.
