@@ -47,9 +47,7 @@ At current scale (~1,600 pages), I am Attend and Consolidate. I review pages, tu
 - Freshness as ranking signal: multiply rank by decay factor based on `last_crawled_at` staleness. Recently verified pages rank higher. Incentivizes draining the recrawl queue.
 - Crawl discovery: accept sitemap.xml and RSS feeds as seed sources.
 
-**Open**:
-- License detection misses prose/footer declarations. False negatives are safe; false positives are not.
-- Wikipedia/Wikimedia return 403 to `PageLeftBot/1.0` UA. Options: use Wikipedia REST API (`/api/rest_v1/page/html/`), or add Wikipedia to a known-copyleft allowlist that skips fetch-based license verification (all Wikimedia content is CC BY-SA 4.0).
+**Open**: license detection misses prose/footer declarations. False negatives are safe; false positives are not.
 
 ### Embed pipe
 

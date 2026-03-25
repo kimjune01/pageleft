@@ -9,6 +9,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -494,8 +495,20 @@ func fetchAndVerify(pageURL string) (*fetchResult, error) {
 		return nil, fmt.Errorf("%s", reason)
 	}
 
+	// Wikimedia sites block bot UAs on the web frontend. Use the REST API instead.
+	fetchURL := pageURL
+	if title, ok := wikipediaTitle(pageURL); ok {
+		u, _ := url.Parse(pageURL)
+		fetchURL = fmt.Sprintf("https://%s/api/rest_v1/page/html/%s", u.Host, title)
+	}
+
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(pageURL)
+	req, err := http.NewRequest("GET", fetchURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("User-Agent", crawler.RobotsUserAgent)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch failed: %w", err)
 	}
@@ -564,6 +577,30 @@ func fetchAndVerify(pageURL string) (*fetchResult, error) {
 		FinalURL: finalURL,
 		BodyHash: h,
 	}, nil
+}
+
+// wikipediaTitle extracts the article title from a Wikipedia/Wikimedia URL.
+// Returns the title and true if the URL is a wiki article page.
+func wikipediaTitle(rawURL string) (string, bool) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", false
+	}
+	host := strings.ToLower(u.Hostname())
+	isWikimedia := host == "en.wikipedia.org" ||
+		host == "en.wikibooks.org" ||
+		host == "en.wikisource.org"
+	if !isWikimedia {
+		return "", false
+	}
+	if !strings.HasPrefix(u.Path, "/wiki/") {
+		return "", false
+	}
+	title := strings.TrimPrefix(u.Path, "/wiki/")
+	if title == "" {
+		return "", false
+	}
+	return title, true
 }
 
 // extractPDFContent extracts text from PDF bytes, splits into chunks by page.

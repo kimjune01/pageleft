@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/url"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -363,21 +365,39 @@ func (db *DB) PeekFrontier(limit int) ([]*FrontierEntry, error) {
 
 
 // InsertPageWithLinks inserts a page and its outgoing links in one call.
+// Outbound links go to the frontier for discovery, but wiki→wiki links are
+// skipped to prevent unbounded crawl depth into Wikipedia.
 func (db *DB) InsertPageWithLinks(p *Page, links []string) (int64, error) {
 	pageID, err := db.InsertPage(p)
 	if err != nil {
 		return 0, err
 	}
 
+	sourceIsWiki := isWikimediaURL(p.URL)
 	for _, targetURL := range links {
 		target, _ := db.GetPageByURL(targetURL)
 		if target != nil {
 			db.InsertLink(pageID, target.ID, "")
 		}
-		db.AddToFrontier(targetURL, 0)
+		// Only add to frontier if not wiki→wiki (prevents unbounded depth).
+		if !(sourceIsWiki && isWikimediaURL(targetURL)) {
+			db.AddToFrontier(targetURL, 0)
+		}
 	}
 
 	return pageID, nil
+}
+
+func isWikimediaURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	return strings.HasSuffix(h, ".wikipedia.org") ||
+		strings.HasSuffix(h, ".wikibooks.org") ||
+		strings.HasSuffix(h, ".wikisource.org") ||
+		strings.HasSuffix(h, ".wikimedia.org")
 }
 
 // --- Chunks ---
