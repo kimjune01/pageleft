@@ -86,6 +86,20 @@ The crawl pipe maps to the six-stage pipeline from the [parts bin](https://june.
   - Convergence gate: if a page's `content_hash` hasn't changed across N consecutive recrawls, extend its recrawl interval exponentially (1 week → 2 weeks → 1 month → 3 months). Stable pages don't need frequent checking. Parts bin: this is EMA applied to change frequency — the recrawl interval converges to the page's actual update rate.
   - Implementation: add `last_crawled_at`, `recrawl_interval`, `consecutive_unchanged` columns to pages. A cron job (or `pageleft recrawl` command) queries pages where `now - last_crawled_at > recrawl_interval`, pushes them to the frontier with priority based on recrawl urgency.
 
+**Next: Code forge indexing** (GitHub, Codeberg)
+
+GitHub and Codeberg repos are copyleft content when their license file says so. Currently blocked because HTML-based license detection doesn't work on forge pages. A new Perceive path:
+
+1. **Detect forge URL**: `github.com/{owner}/{repo}`, `codeberg.org/{owner}/{repo}`.
+2. **Check license via API**:
+   - GitHub: `GET https://api.github.com/repos/{owner}/{repo}/license` → `license.spdx_id`. Match against copyleft set: `GPL-2.0`, `GPL-3.0`, `AGPL-3.0`, `LGPL-*`, `MPL-2.0`, `CC-BY-SA-*`, `GFDL-*`.
+   - Codeberg (Gitea API): `GET https://codeberg.org/api/v1/repos/{owner}/{repo}` → `.license` field. Same SPDX matching.
+3. **Index README + docs**: fetch `README.md` via raw URL (`raw.githubusercontent.com` / Codeberg raw). Chunk as prose (paragraph-level, 50-char floor). Optionally index files in `docs/` directory.
+4. **Don't index source code yet**: code chunking (function-level, AST-aware) is a separate problem. Start with documentation, which is prose and works with the existing chunking pipeline.
+5. **Unblock `github.com` and `codeberg.org`** from `frontier_blocked_domains.txt` but only allow URLs matching the `/{owner}/{repo}` pattern. Subpaths like `/issues`, `/pulls`, `/actions` stay blocked.
+
+Parts bin: this is a new Perceive codec (forge API → structured repo metadata) feeding into the existing Cache/Filter/Remember pipeline. The license check is Filter × predicate (SPDX match against copyleft set).
+
 **Other improvements**:
 - Domain blocklist expansion: [UT1 blacklists](https://dsi.ut-capitole.fr/blacklists/) (CC BY-SA). Flat lookup, zero inference cost.
 - Crawl discovery: accept sitemap.xml and RSS feeds as Perceive sources.
