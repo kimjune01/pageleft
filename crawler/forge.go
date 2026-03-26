@@ -18,16 +18,14 @@ func init() {
 	GitHubToken = os.Getenv("GITHUB_PUBLIC_API_KEY")
 }
 
-// Copyleft SPDX identifiers.
+// Composable SPDX identifiers — licenses that compose with GPL-3.0+/AGPL-3.0.
+// Excludes GPL-2.0-only, LGPL-2.1-only, and GFDL (invariant sections break remixing).
 var copyleftSPDX = map[string]bool{
-	"GPL-2.0": true, "GPL-2.0-only": true, "GPL-2.0-or-later": true,
 	"GPL-3.0": true, "GPL-3.0-only": true, "GPL-3.0-or-later": true,
 	"AGPL-3.0": true, "AGPL-3.0-only": true, "AGPL-3.0-or-later": true,
-	"LGPL-2.1": true, "LGPL-2.1-only": true, "LGPL-2.1-or-later": true,
 	"LGPL-3.0": true, "LGPL-3.0-only": true, "LGPL-3.0-or-later": true,
 	"MPL-2.0": true,
 	"CC-BY-SA-3.0": true, "CC-BY-SA-4.0": true,
-	"GFDL-1.3": true, "GFDL-1.3-only": true, "GFDL-1.3-or-later": true,
 	"CC0-1.0": true, "Unlicense": true,
 }
 
@@ -167,10 +165,13 @@ func matchLicenseText(raw string) string {
 		if strings.Contains(text, "version 3") {
 			return "GPL-3.0"
 		}
-		return "GPL-2.0"
+		return "" // GPL-2.0 — not composable with GPL-3.0+
 	}
 	if strings.Contains(text, "gnu lesser general public license") {
-		return "LGPL-2.1"
+		if strings.Contains(text, "version 3") {
+			return "LGPL-3.0"
+		}
+		return "" // LGPL-2.1 — not composable with GPL-3.0+
 	}
 	if strings.Contains(text, "mozilla public license") {
 		return "MPL-2.0"

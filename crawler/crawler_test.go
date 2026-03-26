@@ -196,7 +196,17 @@ func TestDetectLicense(t *testing.T) {
 		{
 			"anchor rel license GPL",
 			`<html><body><a rel="license" href="https://www.gnu.org/licenses/gpl-3.0.html">GPL</a></body></html>`,
-			false, "GPL",
+			false, "GPL-3.0",
+		},
+		{
+			"GPL-2.0 rejected",
+			`<html><body><a rel="license" href="https://www.gnu.org/licenses/gpl-2.0.html">GPL</a></body></html>`,
+			true, "",
+		},
+		{
+			"GFDL rejected",
+			`<html><head><link rel="license" href="https://www.gnu.org/licenses/fdl-1.3.html"></head></html>`,
+			true, "",
 		},
 		{
 			"no license",
@@ -245,5 +255,59 @@ func TestDetectLicense(t *testing.T) {
 				t.Errorf("got type %q, want %q", got.Type, tt.wantTyp)
 			}
 		})
+	}
+}
+
+func TestMatchLicenseText(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want string
+	}{
+		{"AGPL-3.0", "GNU Affero General Public License version 3", "AGPL-3.0"},
+		{"GPL-3.0", "GNU General Public License version 3", "GPL-3.0"},
+		{"GPL-2.0 rejected", "GNU General Public License version 2", ""},
+		{"GPL no version rejected", "GNU General Public License", ""},
+		{"LGPL-3.0", "GNU Lesser General Public License version 3", "LGPL-3.0"},
+		{"LGPL-2.1 rejected", "GNU Lesser General Public License version 2.1", ""},
+		{"MPL-2.0", "Mozilla Public License Version 2.0", "MPL-2.0"},
+		{"CC BY-SA", "Creative Commons Attribution ShareAlike 4.0", "CC-BY-SA-4.0"},
+		{"CC0", "Creative Commons CC0 1.0 Universal", "CC0-1.0"},
+		{"Unlicense", "This is free and unencumbered software released into the public domain (Unlicense)", "Unlicense"},
+		{"proprietary", "All rights reserved. No part of this software may be reproduced.", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matchLicenseText(tt.text)
+			if got != tt.want {
+				t.Errorf("matchLicenseText(%q) = %q, want %q", tt.text, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCopyleftSPDXComposable(t *testing.T) {
+	accepted := []string{
+		"GPL-3.0", "GPL-3.0-only", "GPL-3.0-or-later",
+		"AGPL-3.0", "AGPL-3.0-only", "AGPL-3.0-or-later",
+		"LGPL-3.0", "LGPL-3.0-only", "LGPL-3.0-or-later",
+		"MPL-2.0", "CC-BY-SA-3.0", "CC-BY-SA-4.0",
+		"CC0-1.0", "Unlicense",
+	}
+	for _, spdx := range accepted {
+		if !copyleftSPDX[spdx] {
+			t.Errorf("copyleftSPDX should accept %q", spdx)
+		}
+	}
+
+	rejected := []string{
+		"GPL-2.0", "GPL-2.0-only", "GPL-2.0-or-later",
+		"LGPL-2.1", "LGPL-2.1-only", "LGPL-2.1-or-later",
+		"GFDL-1.3", "GFDL-1.3-only", "GFDL-1.3-or-later",
+	}
+	for _, spdx := range rejected {
+		if copyleftSPDX[spdx] {
+			t.Errorf("copyleftSPDX should reject %q", spdx)
+		}
 	}
 }

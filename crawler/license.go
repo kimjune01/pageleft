@@ -12,23 +12,24 @@ type LicenseInfo struct {
 	Type string // e.g. "CC BY-SA 4.0", "GPL-3.0", "AGPL-3.0"
 }
 
-// copyleft license URL patterns
+// Composable copyleft license URL patterns.
+// Excludes GPL-2.0, LGPL-2.1, and GFDL — not composable with GPL-3.0+/AGPL-3.0.
+// Order matters: more specific patterns must come before less specific ones.
 var copyleftPatterns = []struct {
 	substring string
 	name      string
 }{
 	// Creative Commons ShareAlike
 	{"creativecommons.org/licenses/by-sa/", "CC BY-SA"},
-	// GPL family
+	// AGPL (always v3)
 	{"gnu.org/licenses/agpl", "AGPL"},
-	{"gnu.org/licenses/lgpl", "LGPL"},
-	{"gnu.org/licenses/gpl", "GPL"},
 	{"opensource.org/licenses/AGPL", "AGPL"},
-	{"opensource.org/licenses/LGPL", "LGPL"},
-	{"opensource.org/licenses/GPL", "GPL"},
-	// GFDL
-	{"gnu.org/licenses/fdl", "GFDL"},
-	{"gnu.org/copyleft/fdl", "GFDL"},
+	// LGPL — only v3+
+	{"gnu.org/licenses/lgpl-3", "LGPL"},
+	{"opensource.org/licenses/LGPL-3", "LGPL"},
+	// GPL — only v3+
+	{"gnu.org/licenses/gpl-3", "GPL-3.0"},
+	{"opensource.org/licenses/GPL-3", "GPL-3.0"},
 	// MPL
 	{"mozilla.org/MPL", "MPL"},
 	{"opensource.org/licenses/MPL", "MPL"},
