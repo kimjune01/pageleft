@@ -45,6 +45,29 @@ func New(db *platform.DB, embedder *platform.Embedder, maxPages int) *Crawler {
 	}
 }
 
+// CrawlSitemap discovers and fetches sitemap URLs for each seed origin,
+// then adds all discovered URLs to the frontier before crawling.
+func (c *Crawler) CrawlSitemap(origins []string) (int, error) {
+	total := 0
+	for _, origin := range origins {
+		sitemapURLs := DiscoverSitemapURLs(c.client, origin)
+		for _, smURL := range sitemapURLs {
+			log.Printf("fetching sitemap: %s", smURL)
+			urls, err := FetchSitemapURLs(c.client, smURL)
+			if err != nil {
+				log.Printf("sitemap fetch failed %s: %v", smURL, err)
+				continue
+			}
+			for _, u := range urls {
+				c.db.AddToFrontier(u, 0)
+			}
+			total += len(urls)
+			log.Printf("  added %d URLs from %s", len(urls), smURL)
+		}
+	}
+	return total, nil
+}
+
 func (c *Crawler) Crawl(seeds []string) error {
 	for _, seed := range seeds {
 		c.db.AddToFrontier(seed, 0)

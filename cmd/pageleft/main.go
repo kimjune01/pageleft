@@ -60,6 +60,7 @@ func main() {
 func cmdCrawl(dbPath string) {
 	fs := flag.NewFlagSet("crawl", flag.ExitOnError)
 	seeds := fs.String("seeds", "", "comma-separated seed URLs")
+	sitemap := fs.Bool("sitemap", false, "discover and fetch sitemaps for each seed origin before crawling")
 	maxPages := fs.Int("max-pages", 100, "maximum pages to crawl")
 	fs.Parse(os.Args[2:])
 
@@ -79,6 +80,14 @@ func cmdCrawl(dbPath string) {
 	seedList := strings.Split(*seeds, ",")
 	for i := range seedList {
 		seedList[i] = strings.TrimSpace(seedList[i])
+	}
+
+	if *sitemap {
+		added, err := c.CrawlSitemap(seedList)
+		if err != nil {
+			log.Fatalf("sitemap crawl failed: %v", err)
+		}
+		log.Printf("sitemap: seeded %d URLs into frontier", added)
 	}
 
 	if err := c.Crawl(seedList); err != nil {
