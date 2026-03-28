@@ -192,19 +192,77 @@ func findMetaLicense(n *html.Node) *LicenseInfo {
 	return nil
 }
 
-// Footer heuristic: look for links containing copyleft URLs in footer-like elements
+// Footer heuristic: look for links containing copyleft URLs in footer-like elements.
+// Also matches anchor text like "CC BY-SA 4.0" inside <footer> elements, even if
+// the href points to a local license page instead of creativecommons.org.
 func findFooterLicense(n *html.Node) *LicenseInfo {
+	if n.Type == html.ElementNode && n.Data == "footer" {
+		return findFooterLicenseInner(n, true)
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if li := findFooterLicense(c); li != nil {
+			return li
+		}
+	}
+	return nil
+}
+
+func findFooterLicenseInner(n *html.Node, inFooter bool) *LicenseInfo {
 	if n.Type == html.ElementNode && n.Data == "a" {
 		href := attr(n, "href")
+		// First: check if href itself is a copyleft URL
 		if href != "" {
 			if li := checkURL(href); li != nil {
 				return li
 			}
 		}
+		// Inside <footer>: also check anchor text for license names
+		if inFooter {
+			text := collectText(n)
+			if li := matchFooterLicenseText(text); li != nil {
+				return li
+			}
+		}
 	}
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		if li := findFooterLicense(c); li != nil {
+		if li := findFooterLicenseInner(c, inFooter); li != nil {
 			return li
+		}
+	}
+	return nil
+}
+
+// collectText returns all text content under a node.
+func collectText(n *html.Node) string {
+	if n.Type == html.TextNode {
+		return n.Data
+	}
+	var sb strings.Builder
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		sb.WriteString(collectText(c))
+	}
+	return sb.String()
+}
+
+// footerLicensePatterns maps anchor text substrings to license info.
+var footerLicensePatterns = []struct {
+	substring string
+	info      LicenseInfo
+}{
+	{"CC BY-SA", LicenseInfo{URL: "https://creativecommons.org/licenses/by-sa/4.0/", Type: "CC BY-SA"}},
+	{"CC0", LicenseInfo{URL: "https://creativecommons.org/publicdomain/zero/1.0/", Type: "CC0"}},
+	{"AGPL", LicenseInfo{URL: "https://www.gnu.org/licenses/agpl-3.0.html", Type: "AGPL"}},
+	{"GPL-3", LicenseInfo{URL: "https://www.gnu.org/licenses/gpl-3.0.html", Type: "GPL-3.0"}},
+	{"GPLv3", LicenseInfo{URL: "https://www.gnu.org/licenses/gpl-3.0.html", Type: "GPL-3.0"}},
+}
+
+// matchFooterLicenseText checks if anchor text contains a known copyleft license name.
+func matchFooterLicenseText(text string) *LicenseInfo {
+	upper := strings.ToUpper(strings.TrimSpace(text))
+	for _, p := range footerLicensePatterns {
+		if strings.Contains(upper, strings.ToUpper(p.substring)) {
+			li := p.info
+			return &li
 		}
 	}
 	return nil

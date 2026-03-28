@@ -29,6 +29,8 @@ en.wikipedia.org	CC BY-SA	https://creativecommons.org/licenses/by-sa/3.0/
 en.wikibooks.org	CC BY-SA	https://creativecommons.org/licenses/by-sa/3.0/
 en.wikisource.org	CC BY-SA	https://creativecommons.org/licenses/by-sa/3.0/
 june.kim	CC BY-SA	https://creativecommons.org/licenses/by-sa/4.0/
+drewdevault.com	CC BY-SA	https://creativecommons.org/licenses/by-sa/4.0/
+pitkley.dev	CC BY-SA	https://creativecommons.org/licenses/by-sa/4.0/
 
 # Public domain sources
 rfc-editor.org	Public Domain	https://trustee.ietf.org/about/faq/#rights-in-rfcs

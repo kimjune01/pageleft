@@ -79,9 +79,11 @@ Crawl and embed run on federated workers — PageLeft serves the work queue and 
   - Convergence gate: if `content_hash` unchanged across N recrawls, extend interval exponentially (1w → 2w → 1m → 3m). Parts bin: EMA applied to change frequency.
 
 **Other improvements**:
-- Crawl discovery: accept sitemap.xml and RSS feeds as Perceive sources.
+- **Feed/sitemap ingestion**: periodically fetch `sitemap.xml` and `feed.xml`/`atom.xml` from known copyleft domains, push discovered URLs into the frontier. Lightweight cron — no new pipe, just a Perceive source for the existing crawl pipe. Priority: copyleft domain allowlist sites first (already trusted, no per-page license detection needed). Store `last_fetched` per feed URL to support conditional GET and avoid re-processing unchanged feeds.
 - Bloom filter for URL dedup in `AddToFrontier`: currently does a full `GetPageByURL` query. At scale, a probabilistic cache avoids the DB round-trip. Parts bin: Cache × probabilistic → Bloom filter.
 - Bloom filter rebuild on deploy: the persistent `nonpermissive.bloom` learns domains at runtime, but can't *unlearn* when text file lists change (e.g., unblocking `github.com`). Deleting the file and restarting rebuilds from seed lists in ~30s. Automate as a deploy step: if `frontier_blocked_domains.txt` changed since last deploy, delete and re-seed. UT1 re-seed via `seed-blocklist` could also run on a monthly cron.
+
+**Planned: document extraction** — `.docx`, `.xlsx`, `.pptx` URLs are currently blocked from the frontier because the contribute handler only accepts HTML and PDF. Adding extraction support (e.g., via Go libraries for OOXML) would let these through the same path as PDF: text extraction at fetch time, domain-level license required. Unblock the extensions in `binaryExtensions` once extraction is implemented.
 
 **Open**: license detection misses prose/footer declarations. False negatives are safe; false positives are not.
 
@@ -152,6 +154,23 @@ Quality is not a page-level score that an LLM assigns. Originality, novelty, and
 **Next**: auto-reindex PageRank after batch indexing. Currently requires manual `pageleft reindex` command. Could trigger automatically when page count increases by >5% since last reindex.
 
 **Open**: network bias — PageRank favors well-linked authors. A brilliant page with no inbound links ranks poorly. DPP in embedding space partially compensates — an unlinked page with a novel idea still gets selected for diversity. But the bias is structural.
+
+### Domain discovery (not started)
+
+**Goal**: grow the copyleft domain list automatically instead of manual curation.
+
+Copyleft content is sparse on the web. Spidering outward from known sources hits diminishing returns fast — most outbound links point to non-copyleft sites. The growth bottleneck isn't crawling or feed ingestion, it's finding new domains that publish copyleft content at all.
+
+**Sources to mine**:
+- Creative Commons search / CC directory listings
+- Wikipedia external links from copyleft-licensed articles (outbound links from CC BY-SA pages often point to CC BY-SA sources)
+- Open textbook directories (OpenStax, Open Textbook Library)
+- AGPL/GPL project documentation on custom domains (not just GitHub — hosted docs sites)
+- Academic open-access repositories with CC BY-SA mandates (e.g., DOAJ, PubMed Central OA subset)
+
+**Verification**: fetch homepage, check for site-wide license declaration (`<meta>`, `dc.rights`, footer, `/license` page). If copyleft → add to domain list, auto-discover feed, start ingesting. Conservative: false negatives are safe, false positives are not. Require at least two signals (e.g., meta tag + footer) before trusting a domain-level license claim.
+
+**Command**: `pageleft discover-domains` — runs the mining sources, verifies candidates, appends confirmed domains to `copyleft_domains.txt`.
 
 ### Feed reader pipe (not started)
 

@@ -32,6 +32,11 @@ func Resolve(rawURL string) Resolution {
 		return Resolution{Action: Skip, Reason: "not HTTP"}
 	}
 
+	// 1b. Binary file extension — not indexable text
+	if isBinaryURL(rawURL) {
+		return Resolution{Action: Block, Reason: "binary file extension"}
+	}
+
 	domain := ExtractDomain(rawURL)
 	if domain == "" {
 		return Resolution{Action: Skip, Reason: "no domain"}
@@ -108,6 +113,9 @@ func ResolveForFrontier(rawURL string) bool {
 	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
 		return false
 	}
+	if isBinaryURL(rawURL) {
+		return false
+	}
 	domain := ExtractDomain(rawURL)
 	if domain == "" {
 		return false
@@ -122,6 +130,36 @@ func ResolveForFrontier(rawURL string) bool {
 		return false
 	}
 	return true
+}
+
+// isBinaryURL returns true if the URL path ends with a non-text file extension.
+func isBinaryURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	path := strings.ToLower(u.Path)
+	for _, ext := range binaryExtensions {
+		if strings.HasSuffix(path, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+var binaryExtensions = []string{
+	// Images
+	".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico", ".tiff", ".tif", ".avif",
+	// Audio/video
+	".mp3", ".mp4", ".wav", ".ogg", ".webm", ".flac", ".avi", ".mov", ".mkv",
+	// Archives
+	".zip", ".tar", ".gz", ".bz2", ".xz", ".rar", ".7z",
+	// Binaries
+	".exe", ".dll", ".so", ".dylib", ".bin", ".dmg", ".iso", ".deb", ".rpm",
+	// Documents (non-text, but not PDF — PDF text extraction is supported)
+	".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+	// Fonts
+	".woff", ".woff2", ".ttf", ".otf", ".eot",
 }
 
 // CanonicalPageURL normalizes a URL for storage. Collapses forge deep paths

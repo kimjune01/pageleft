@@ -238,6 +238,21 @@ func TestDetectLicense(t *testing.T) {
 			`<html><head><meta name="dc.rights" content="https://creativecommons.org/publicdomain/zero/1.0/"></head></html>`,
 			false, "CC0",
 		},
+		{
+			"footer anchor text CC BY-SA with local href (pitkley.dev style)",
+			`<html><body><footer>Text content licensed under <a href="/licensing/cc-by-sa-4-0/">CC BY-SA 4.0</a>.</footer></body></html>`,
+			false, "CC BY-SA",
+		},
+		{
+			"footer anchor text GPL-3 with local href",
+			`<html><body><footer>Licensed under <a href="/license">GPLv3</a>.</footer></body></html>`,
+			false, "GPL-3.0",
+		},
+		{
+			"non-footer anchor text CC BY-SA should not match",
+			`<html><body><p>Read about <a href="/article">CC BY-SA</a> licenses.</p></body></html>`,
+			true, "",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
