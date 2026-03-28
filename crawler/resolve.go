@@ -47,31 +47,33 @@ func Resolve(rawURL string) Resolution {
 		return Resolution{Action: Block, Reason: "domain blocked: platform ToS"}
 	}
 
-	// 3. Bloom filters (static + dynamic — non-permissive domains)
+	// 3. Copyleft domain allowlist (exact set — skip per-page detection)
+	// Must precede Bloom filter: a domain added to the allowlist after being
+	// learned as non-permissive would otherwise stay blocked forever.
+	if dl, ok := matchCopyleftDomain(copyleftDomains, domain); ok {
+		return Resolution{
+			Action:  Allow,
+			License: &LicenseInfo{URL: dl.LicenseURL, Type: dl.LicenseType},
+		}
+	}
+
+	// 4. Bloom filters (static + dynamic — non-permissive domains)
 	if IsNonPermissive(domain) {
 		return Resolution{Action: Block, Reason: "domain non-permissive (bloom)"}
 	}
 
-	// 4. Code forge (GitHub, Codeberg) — check license via API, fetch README
+	// 5. Code forge (GitHub, Codeberg) — check license via API, fetch README
 	if owner, repo, ok := parseForgeURL(rawURL); ok {
 		return resolveForge(rawURL, owner, repo)
 	}
 
-	// 5. Wikipedia/Wikimedia — rewrite to REST API, license is CC BY-SA
+	// 6. Wikipedia/Wikimedia — rewrite to REST API, license is CC BY-SA
 	if title, ok := parseWikimediaURL(rawURL); ok {
 		u, _ := url.Parse(rawURL)
 		return Resolution{
 			Action:   Allow,
 			License:  &LicenseInfo{URL: "https://creativecommons.org/licenses/by-sa/3.0/", Type: "CC BY-SA"},
 			FetchURL: fmt.Sprintf("https://%s/api/rest_v1/page/html/%s", u.Host, title),
-		}
-	}
-
-	// 6. Copyleft domain allowlist (exact set — skip per-page detection)
-	if dl, ok := matchCopyleftDomain(copyleftDomains, domain); ok {
-		return Resolution{
-			Action:  Allow,
-			License: &LicenseInfo{URL: dl.LicenseURL, Type: dl.LicenseType},
 		}
 	}
 
