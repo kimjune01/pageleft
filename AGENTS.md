@@ -5,8 +5,9 @@
 - `./deploy.sh` to cross-compile, upload, restart, and smoke test
 
 ## Architecture
-- Go server (HTTP + SQLite), Python sidecar for local inference (port 8081)
-- HF free tier for embeddings via `platform/embedder.go`
+- Go server (HTTP + SQLite), HF free tier for embeddings via `platform/embedder.go`
+- Public `POST /api/embed` proxies the server's HF token — no local model needed
+- `./drain.sh` drains the embed queue using only the public API
 - Embedding model declared as constants in `platform/embedder.go` (`EmbeddingModel`, `EmbeddingDim`)
 
 ## Production

@@ -108,9 +108,11 @@ func (h *Handler) Mux() http.Handler {
 	mux.HandleFunc("POST /api/contribute/page", h.handleContributePage)
 	mux.HandleFunc("GET /api/work/embed", h.handleWorkEmbed)
 	mux.HandleFunc("GET /api/work/quality", h.handleWorkQuality)
-	mux.HandleFunc("POST /api/contribute/embedding", h.handleContributeEmbedding)
+	mux.HandleFunc("POST /api/contribute/embeddings", h.handleContributeEmbeddings)
 	mux.HandleFunc("POST /api/contribute/quality", h.handleContributeQuality)
 	mux.HandleFunc("POST /api/contribute/compilable", h.handleContributeCompilable)
+	mux.HandleFunc("POST /api/embed", h.handleEmbed)
+	mux.HandleFunc("GET /contribute", h.handleContribute)
 	return mux
 }
 
@@ -129,6 +131,48 @@ func (h *Handler) handleFavicon(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🍄</text></svg>`)
 }
 
+func (h *Handler) handleContribute(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	fmt.Fprint(w, `Contributing to PageLeft 🍄
+
+Four ways to contribute. All self-interested.
+Read why: https://www.june.kim/why-contribute
+
+Content
+  Write a blog post under a copyleft license.
+  PageLeft will find it, verify the license, and index it.
+
+Code
+  Publish a copyleft blog post explaining what you'd change and why.
+  Open a one-line PR linking to it. A coding agent evaluates it
+  against the manifesto and implements what aligns.
+  https://github.com/kimjune01/pageleft
+
+Compute
+  Drain the embedding queue — needs only python3:
+
+    git clone https://github.com/kimjune01/pageleft.git
+    cd pageleft && ./drain.sh
+
+  The script claims chunks, embeds via the public API, and batch-submits.
+  No local model, no API keys, no dependencies.
+
+  Or do it manually:
+    1. curl https://pageleft.cc/api/work/embed?limit=10
+    2. curl -X POST https://pageleft.cc/api/embed -d '{"texts":["...","..."]}'
+    3. curl -X POST https://pageleft.cc/api/contribute/embeddings -d '[{"chunk_id":N,"embedding":[...]}]'
+
+Quality
+  Run a SOTA model against random pages and submit quality scores.
+  Each score compounds into a page's ranking weight. No binary eviction, just math.
+
+    1. curl https://pageleft.cc/api/work/quality?limit=10
+    2. curl -X POST https://pageleft.cc/api/contribute/quality -d '{"page_id":N,"score":0.8,"model":"gpt-4o"}'
+
+  See why this needs frontier models: https://www.june.kim/slop-detection
+`)
+}
+
 func (h *Handler) handleRoot(w http.ResponseWriter, r *http.Request) {
 	pages, _ := h.db.PageCount()
 	chunks, _ := h.db.ChunkCount()
@@ -144,13 +188,7 @@ API
   GET  /api/stats                     Index stats
   GET  /api/leaderboard               Contributor rankings
 
-Contribute
-  GET  /api/frontier                  Claim URLs to crawl
-  POST /api/contribute/page           Submit crawled page {"url":"..."}
-  GET  /api/work/embed?limit=10       Claim chunks to embed {chunk_id, page_id, text}
-  POST /api/contribute/embedding      Submit embedding {chunk_id, embedding}
-  GET  /api/work/quality?limit=10     Claim pages to review
-  POST /api/contribute/quality        Submit quality score {page_id, score, model}
+Contribute: https://pageleft.cc/contribute
 
 Try:  curl https://pageleft.cc/api/search?q=open+source+licensing
 

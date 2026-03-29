@@ -176,6 +176,61 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleEmbed exposes the server's HF-backed embedder as a public endpoint.
+// Contributors can embed text without needing their own HF token or local model.
+// POST /api/embed  {"text":"..."} or {"texts":["...","..."]}
+func (h *Handler) handleEmbed(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 256*1024))
+	if err != nil {
+		http.Error(w, `{"error":"read body failed"}`, http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Text  string   `json:"text"`
+		Texts []string `json:"texts"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+
+	if req.Text == "" && len(req.Texts) == 0 {
+		http.Error(w, `{"error":"provide text or texts"}`, http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if req.Text != "" {
+		vec, err := h.embedder.Embed(req.Text)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"embed failed: %v"}`, err), http.StatusBadGateway)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"embedding": vec,
+			"dim":       len(vec),
+		})
+		return
+	}
+
+	// Batch mode — cap at 32 texts to limit HF API abuse.
+	if len(req.Texts) > 32 {
+		http.Error(w, `{"error":"max 32 texts per batch"}`, http.StatusBadRequest)
+		return
+	}
+	vecs, err := h.embedder.EmbedBatch(req.Texts)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"embed failed: %v"}`, err), http.StatusBadGateway)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{
+		"embeddings": vecs,
+		"dim":        platform.EmbeddingDim,
+	})
+}
+
 // handleWorkEmbed returns chunks that need embeddings computed.
 // Every item has the same shape: {chunk_id, page_id, text}.
 // Pages without chunks are chunked on demand before serving.
@@ -278,71 +333,69 @@ func splitTextContent(text string) []string {
 	return paragraphs
 }
 
-// embeddingSubmission is the JSON body for POST /api/contribute/embedding.
-type embeddingSubmission struct {
-	PageID    int64     `json:"page_id"`
+// batchEmbeddingItem is one entry in a batch embedding submission.
+type batchEmbeddingItem struct {
 	ChunkID   int64     `json:"chunk_id"`
 	Embedding []float64 `json:"embedding"`
 }
 
-// handleContributeEmbedding accepts an embedding from a federated worker.
-// Supports both chunk_id (new) and page_id (backward compat).
-// POST /api/contribute/embedding
-func (h *Handler) handleContributeEmbedding(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1*1024*1024))
+// handleContributeEmbeddings accepts a batch of embeddings in one request.
+// POST /api/contribute/embeddings  [{"chunk_id":1,"embedding":[...]}, ...]
+func (h *Handler) handleContributeEmbeddings(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 10*1024*1024))
 	if err != nil {
 		http.Error(w, `{"error":"read body failed"}`, http.StatusBadRequest)
 		return
 	}
 
-	var sub embeddingSubmission
-	if err := json.Unmarshal(body, &sub); err != nil {
-		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+	var items []batchEmbeddingItem
+	if err := json.Unmarshal(body, &items); err != nil {
+		http.Error(w, `{"error":"invalid JSON, expected array"}`, http.StatusBadRequest)
 		return
 	}
 
-	if len(sub.Embedding) == 0 {
-		http.Error(w, `{"error":"embedding is required"}`, http.StatusBadRequest)
+	if len(items) == 0 {
+		http.Error(w, `{"error":"empty batch"}`, http.StatusBadRequest)
+		return
+	}
+	if len(items) > 100 {
+		http.Error(w, `{"error":"max 100 items per batch"}`, http.StatusBadRequest)
 		return
 	}
 
-	if len(sub.Embedding) != platform.EmbeddingDim {
-		http.Error(w, fmt.Sprintf(`{"error":"embedding must be %d dimensions (got %d), use model %s"}`, platform.EmbeddingDim, len(sub.Embedding), platform.EmbeddingModel), http.StatusBadRequest)
-		return
-	}
+	contributor := platform.ContributorHash(r.RemoteAddr)
+	accepted := 0
+	completedPages := []int64{}
 
-	h.db.LogContribution("embed", platform.ContributorHash(r.RemoteAddr))
-	resp := map[string]any{"accepted": true}
-
-	if sub.ChunkID != 0 {
-		if err := h.db.UpdateChunkEmbedding(sub.ChunkID, sub.Embedding); err != nil {
-			http.Error(w, `{"error":"update chunk failed"}`, http.StatusInternalServerError)
-			return
+	for _, item := range items {
+		if item.ChunkID == 0 || len(item.Embedding) != platform.EmbeddingDim {
+			continue
 		}
-		// Auto-compute page embedding when all chunks are embedded.
-		if pageID, err := h.db.PageIDForChunk(sub.ChunkID); err == nil {
+		if err := h.db.UpdateChunkEmbedding(item.ChunkID, item.Embedding); err != nil {
+			continue
+		}
+		accepted++
+		if pageID, err := h.db.PageIDForChunk(item.ChunkID); err == nil {
 			if allDone, err := h.db.AllChunksEmbedded(pageID); err == nil && allDone {
 				h.computePageEmbedding(pageID)
-				h.invalidateChunkCache()
-				resp["page_complete"] = true
-				resp["next"] = map[string]string{
-					"quality": fmt.Sprintf("POST /api/contribute/quality {\"page_id\":%d, \"score\":0.0-1.0, \"model\":\"your-model\"}", pageID),
-				}
+				completedPages = append(completedPages, pageID)
 			}
 		}
-	} else if sub.PageID != 0 {
-		if err := h.db.UpdateEmbedding(sub.PageID, sub.Embedding); err != nil {
-			http.Error(w, `{"error":"update page failed"}`, http.StatusInternalServerError)
-			return
+	}
+
+	if accepted > 0 {
+		h.db.LogContribution("embed", contributor)
+		if len(completedPages) > 0 {
+			h.invalidateChunkCache()
 		}
-		h.invalidateChunkCache()
-	} else {
-		http.Error(w, `{"error":"chunk_id or page_id is required"}`, http.StatusBadRequest)
-		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(map[string]any{
+		"accepted":        accepted,
+		"total":           len(items),
+		"pages_completed": len(completedPages),
+	})
 }
 
 // computePageEmbedding averages chunk embeddings into a page-level embedding.
