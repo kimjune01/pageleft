@@ -240,6 +240,51 @@ func TestContributePage_PDF_RejectedWithoutDomainLicense(t *testing.T) {
 	}
 }
 
+func TestFrontierReject_DeletesAndLearns(t *testing.T) {
+	h, cleanup := newTestHandler(t)
+	defer cleanup()
+
+	// Seed frontier with URLs from two domains: 3 from dead.example.com, 1 from ok.example.com.
+	h.db.AddToFrontier("https://dead.example.com/a", 0)
+	h.db.AddToFrontier("https://dead.example.com/b", 0)
+	h.db.AddToFrontier("https://dead.example.com/c", 0)
+	h.db.AddToFrontier("https://ok.example.com/x", 0)
+
+	// Reject all four URLs. dead.example.com has 3+ so it should be learned.
+	body := `[
+		{"url":"https://dead.example.com/a","reason":"status 404"},
+		{"url":"https://dead.example.com/b","reason":"status 404"},
+		{"url":"https://dead.example.com/c","reason":"status 403"},
+		{"url":"https://ok.example.com/x","reason":"timeout"}
+	]`
+	req := httptest.NewRequest("POST", "/api/frontier/reject", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Mux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if deleted := int(resp["deleted"].(float64)); deleted != 4 {
+		t.Errorf("deleted = %d, want 4", deleted)
+	}
+	if learned := int(resp["domains_learned"].(float64)); learned != 1 {
+		t.Errorf("domains_learned = %d, want 1 (dead.example.com)", learned)
+	}
+
+	// Frontier should be empty.
+	entries, _ := h.db.PopFrontier(10)
+	if len(entries) != 0 {
+		t.Errorf("frontier has %d entries, want 0", len(entries))
+	}
+}
+
 func TestContributePage_NoCopyleft_Rejected(t *testing.T) {
 	fakeSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
