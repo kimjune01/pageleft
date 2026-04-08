@@ -113,3 +113,59 @@ func TestQualityDuplicateReviewRejected(t *testing.T) {
 		t.Fatalf("quality after rejected dup: got %f, want 0.8", q)
 	}
 }
+
+func TestNormalizeURL_StripsTrackingParams(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			"share=linkedin stripped",
+			"https://bartoszmilewski.com/about?share=linkedin",
+			"https://bartoszmilewski.com/about",
+		},
+		{
+			"share=twitter stripped",
+			"https://bartoszmilewski.com/2025/10/18/post?share=twitter",
+			"https://bartoszmilewski.com/2025/10/18/post",
+		},
+		{
+			"utm params stripped",
+			"https://example.com/post?utm_source=newsletter&utm_medium=email&utm_campaign=launch",
+			"https://example.com/post",
+		},
+		{
+			"fbclid stripped",
+			"https://example.com/post?fbclid=IwAR0xyz",
+			"https://example.com/post",
+		},
+		{
+			"content params preserved",
+			"https://example.com/page?id=42&page=2",
+			"https://example.com/page?id=42&page=2",
+		},
+		{
+			"mixed: tracking stripped, content kept",
+			"https://example.com/page?id=42&utm_source=x&fbclid=y",
+			"https://example.com/page?id=42",
+		},
+		{
+			"share variant dedupes with canonical",
+			"https://bartoszmilewski.com/about?share=linkedin",
+			NormalizeURL("https://bartoszmilewski.com/about"),
+		},
+		{
+			"no query params unchanged",
+			"https://example.com/page",
+			"https://example.com/page",
+		},
+	}
+
+	for _, tt := range tests {
+		got := NormalizeURL(tt.in)
+		if got != tt.want {
+			t.Errorf("%s: NormalizeURL(%q) = %q, want %q", tt.name, tt.in, got, tt.want)
+		}
+	}
+}

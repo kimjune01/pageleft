@@ -154,6 +154,12 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Strip tracking params before fetch. The share-link variants
+	// (?share=linkedin, ?share=twitter) trigger off-domain redirects to
+	// login pages that pollute the index. We do not call full NormalizeURL
+	// here because that would upgrade http→https and break HTTP-only sites.
+	sub.URL = platform.StripTrackingParams(sub.URL)
+
 	// Fetch the page, verify copyleft license, and keep the parsed HTML.
 	result, err := fetchAndVerify(sub.URL)
 	if err != nil {

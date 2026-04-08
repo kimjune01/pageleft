@@ -408,10 +408,18 @@ func cmdPrunePages(dbPath string) {
 	before, _ := db.PageCount()
 	log.Printf("pages before: %d", before)
 
-	// Same filter as the resolve chain — anything Resolve() would now Block
-	// gets retroactively deleted.
+	// Filter: anything the resolve chain now blocks, OR any URL whose
+	// canonical form differs from itself (meaning it has tracking params
+	// or other denormalizations that the current rules would have stripped
+	// at ingest time).
 	removed, err := db.PrunePages(func(u string) bool {
-		return crawler.Resolve(u).Action == crawler.Block
+		if crawler.Resolve(u).Action == crawler.Block {
+			return true
+		}
+		if crawler.CanonicalPageURL(u) != u {
+			return true
+		}
+		return false
 	})
 	if err != nil {
 		log.Fatalf("prune: %v", err)
