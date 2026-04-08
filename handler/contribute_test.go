@@ -295,6 +295,45 @@ func TestFrontierReject_DeletesAndLearns(t *testing.T) {
 	}
 }
 
+func TestContributePage_CapturesETagAndLastModified(t *testing.T) {
+	// Server emits both validators in the response.
+	fakeSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set("ETag", `"abc-123"`)
+		w.Header().Set("Last-Modified", "Mon, 01 Jan 2026 00:00:00 GMT")
+		w.Write([]byte(copyleftPage()))
+	}))
+	defer fakeSite.Close()
+
+	h, cleanup := newTestHandler(t)
+	defer cleanup()
+
+	body := `{"url":"` + fakeSite.URL + `/test"}`
+	req := httptest.NewRequest("POST", "/api/contribute/page", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Mux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	page, err := h.db.GetPageByURL(fakeSite.URL + "/test")
+	if err != nil {
+		t.Fatalf("get page: %v", err)
+	}
+	if page.ETag != `"abc-123"` {
+		t.Errorf("ETag = %q, want %q", page.ETag, `"abc-123"`)
+	}
+	if page.LastModified != "Mon, 01 Jan 2026 00:00:00 GMT" {
+		t.Errorf("LastModified = %q, want header value", page.LastModified)
+	}
+	if page.LastValidated.IsZero() {
+		t.Error("LastValidated should be set on fresh insert, got zero")
+	}
+}
+
 func TestContributePage_NoCopyleft_Rejected(t *testing.T) {
 	fakeSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")

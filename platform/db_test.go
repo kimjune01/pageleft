@@ -1,9 +1,11 @@
 package platform
 
 import (
+	"database/sql"
 	"math"
 	"os"
 	"testing"
+	"time"
 )
 
 func testDB(t *testing.T) *DB {
@@ -111,6 +113,217 @@ func TestQualityDuplicateReviewRejected(t *testing.T) {
 	q := getQuality(t, db, pageID)
 	if math.Abs(q-0.8) > 0.001 {
 		t.Fatalf("quality after rejected dup: got %f, want 0.8", q)
+	}
+}
+
+func TestMigrate_IsIdempotent(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+	// First migrate ran in NewDB. Run a second time and confirm no error.
+	if err := db.migrate(); err != nil {
+		t.Fatalf("second migrate: %v", err)
+	}
+	// And a third for good measure.
+	if err := db.migrate(); err != nil {
+		t.Fatalf("third migrate: %v", err)
+	}
+}
+
+// TestMigrate_UpgradesOldSchema simulates a production upgrade: it manually
+// creates an old pages table without the Layer 0 validator columns, then runs
+// migrate() and verifies the new columns exist and inserts/reads work.
+// This is the actual scenario migrate() needs to handle safely.
+func TestMigrate_UpgradesOldSchema(t *testing.T) {
+	f, err := os.CreateTemp("", "pageleft-upgrade-*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	t.Cleanup(func() { os.Remove(f.Name()) })
+
+	// Open a raw connection and create the pre-Layer-0 schema by hand.
+	raw, err := sql.Open("sqlite", f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = raw.Exec(`
+		CREATE TABLE pages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			url TEXT UNIQUE NOT NULL,
+			title TEXT NOT NULL DEFAULT '',
+			text_content TEXT NOT NULL DEFAULT '',
+			license_url TEXT NOT NULL DEFAULT '',
+			license_type TEXT NOT NULL DEFAULT '',
+			embedding JSON,
+			pagerank REAL NOT NULL DEFAULT 0,
+			crawled_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			content_hash TEXT NOT NULL DEFAULT ''
+		);
+		INSERT INTO pages (url, title, text_content, license_url, license_type, content_hash)
+		VALUES ('https://example.com/legacy', 'Legacy', 'old content',
+		        'https://creativecommons.org/licenses/by-sa/4.0/', 'CC BY-SA', 'oldhash');
+	`)
+	if err != nil {
+		t.Fatalf("create old schema: %v", err)
+	}
+	raw.Close()
+
+	// Now open via NewDB — migrate() runs and should add the validator columns
+	// without losing the legacy row.
+	db, err := NewDB(f.Name())
+	if err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	defer db.Close()
+
+	// The legacy row should still be readable, with empty validator fields.
+	got, err := db.GetPageByURL("https://example.com/legacy")
+	if err != nil {
+		t.Fatalf("read legacy row after upgrade: %v", err)
+	}
+	if got.Title != "Legacy" {
+		t.Errorf("legacy title lost: got %q", got.Title)
+	}
+	if got.ETag != "" {
+		t.Errorf("legacy ETag should be empty default, got %q", got.ETag)
+	}
+	if got.ConsecutiveFailures != 0 {
+		t.Errorf("legacy consecutive_failures should default to 0, got %d", got.ConsecutiveFailures)
+	}
+
+	// And new inserts with validators should work post-upgrade.
+	now := time.Now().Truncate(time.Second)
+	p := &Page{
+		URL:          "https://example.com/post-upgrade",
+		Title:        "New",
+		LicenseURL:   "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType:  "CC BY-SA",
+		CrawledAt:    now,
+		ETag:         `"new-etag"`,
+		LastModified: "Mon, 01 Jan 2026 00:00:00 GMT",
+	}
+	if _, err := db.InsertPage(p); err != nil {
+		t.Fatalf("insert post-upgrade: %v", err)
+	}
+	got, err = db.GetPageByURL("https://example.com/post-upgrade")
+	if err != nil {
+		t.Fatalf("read post-upgrade row: %v", err)
+	}
+	if got.ETag != `"new-etag"` {
+		t.Errorf("post-upgrade ETag = %q, want %q", got.ETag, `"new-etag"`)
+	}
+}
+
+// TestInsertPage_UpsertUpdatesValidators verifies the ON CONFLICT path
+// updates etag, last_modified, last_validated, and consecutive_failures
+// when re-inserting an existing URL.
+func TestInsertPage_UpsertUpdatesValidators(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+
+	first := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := db.InsertPage(&Page{
+		URL:           "https://example.com/upsert",
+		Title:         "v1",
+		LicenseURL:    "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType:   "CC BY-SA",
+		CrawledAt:     first,
+		ETag:          `"v1"`,
+		LastModified:  "Wed, 01 Jan 2026 00:00:00 GMT",
+		LastValidated: first,
+	}); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+
+	// Re-insert with new validators.
+	second := first.Add(24 * time.Hour)
+	if _, err := db.InsertPage(&Page{
+		URL:           "https://example.com/upsert",
+		Title:         "v2",
+		LicenseURL:    "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType:   "CC BY-SA",
+		CrawledAt:     second,
+		ETag:          `"v2"`,
+		LastModified:  "Thu, 02 Jan 2026 00:00:00 GMT",
+		LastValidated: second,
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	got, err := db.GetPageByURL("https://example.com/upsert")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.ETag != `"v2"` {
+		t.Errorf("ETag after upsert = %q, want %q", got.ETag, `"v2"`)
+	}
+	if got.LastModified != "Thu, 02 Jan 2026 00:00:00 GMT" {
+		t.Errorf("LastModified after upsert = %q, want updated value", got.LastModified)
+	}
+	if !got.LastValidated.Equal(second) {
+		t.Errorf("LastValidated after upsert = %v, want %v", got.LastValidated, second)
+	}
+}
+
+func TestInsertPage_StoresETagAndLastModified(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+
+	now := time.Now().Truncate(time.Second)
+	p := &Page{
+		URL:          "https://example.com/test",
+		Title:        "Test",
+		TextContent:  "hello",
+		LicenseURL:   "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType:  "CC BY-SA",
+		ContentHash:  "abc123",
+		CrawledAt:    now,
+		ETag:         `"v1-deadbeef"`,
+		LastModified: "Wed, 21 Oct 2026 07:28:00 GMT",
+	}
+	if _, err := db.InsertPage(p); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	got, err := db.GetPageByURL("https://example.com/test")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.ETag != `"v1-deadbeef"` {
+		t.Errorf("ETag = %q, want %q", got.ETag, `"v1-deadbeef"`)
+	}
+	if got.LastModified != "Wed, 21 Oct 2026 07:28:00 GMT" {
+		t.Errorf("LastModified = %q, want header value", got.LastModified)
+	}
+	if got.LastValidated.IsZero() {
+		t.Error("LastValidated should default to CrawledAt for fresh insert, got zero time")
+	}
+	if got.ConsecutiveFailures != 0 {
+		t.Errorf("ConsecutiveFailures = %d, want 0", got.ConsecutiveFailures)
+	}
+}
+
+func TestInsertPage_LastValidatedDefaultsToCrawledAt(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+
+	crawled := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	p := &Page{
+		URL:         "https://example.com/no-validated",
+		LicenseURL:  "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType: "CC BY-SA",
+		CrawledAt:   crawled,
+		// LastValidated intentionally zero
+	}
+	if _, err := db.InsertPage(p); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	got, err := db.GetPageByURL("https://example.com/no-validated")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !got.LastValidated.Equal(crawled) {
+		t.Errorf("LastValidated = %v, want %v (defaulted to CrawledAt)", got.LastValidated, crawled)
 	}
 }
 
