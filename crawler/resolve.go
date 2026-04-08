@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/kimjune01/pageleft/platform"
 )
 
 // Action is the outcome of URL resolution.
@@ -219,14 +221,17 @@ func isBinaryURL(rawURL string) bool {
 // Loaded from crawler/binary_extensions.txt at init time.
 var binaryExtensions []string
 
-// CanonicalPageURL normalizes a URL for storage. Collapses forge deep paths
-// to owner/repo so the same repo isn't stored multiple times.
+// CanonicalPageURL normalizes a URL for storage in the pages table:
+// strips tracking params and collapses forge deep paths to owner/repo.
+// Does NOT upgrade scheme (http stays http) so HTTP-only sites and tests
+// keep working. Frontier dedup uses platform.NormalizeURL which is stricter.
 func CanonicalPageURL(rawURL string) string {
-	if owner, repo, ok := parseForgeURL(rawURL); ok {
-		host := ExtractDomain(rawURL)
+	stripped := platform.StripTrackingParams(rawURL)
+	if owner, repo, ok := parseForgeURL(stripped); ok {
+		host := ExtractDomain(stripped)
 		return "https://" + host + "/" + owner + "/" + repo
 	}
-	return rawURL
+	return stripped
 }
 
 // parseForgeURL extracts owner/repo from any github.com or codeberg.org URL.

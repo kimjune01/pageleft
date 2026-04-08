@@ -499,8 +499,69 @@ func (db *DB) AddToFrontier(rawURL string, depth int) error {
 	return err
 }
 
-// NormalizeURL canonicalizes a URL: strips fragment, trailing slash,
-// upgrades http to https, and collapses forge URLs to owner/repo.
+// trackingParams are query parameters that don't affect page content but
+// may trigger redirects (e.g. ?share=linkedin). Stripping them at normalize
+// time means the share variant and the canonical URL deduplicate naturally.
+var trackingParams = map[string]bool{
+	// Social share buttons (often redirect to login/share dialog)
+	"share":  true,
+	"shared": true,
+	// Google Analytics / UTM
+	"utm_source":   true,
+	"utm_medium":   true,
+	"utm_campaign": true,
+	"utm_content":  true,
+	"utm_term":     true,
+	"utm_id":       true,
+	// Click-tracking IDs
+	"fbclid":   true,
+	"gclid":    true,
+	"dclid":    true,
+	"msclkid":  true,
+	"yclid":    true,
+	"_ga":      true,
+	// Newsletter / mail
+	"mc_eid":  true,
+	"mc_cid":  true,
+	"_hsenc":  true,
+	"_hsmi":   true,
+	// Misc referrer
+	"ref_src": true,
+}
+
+// stripTrackingParams removes known tracking and share-link query parameters,
+// leaving content-bearing params intact.
+func stripTrackingParams(u *url.URL) {
+	if u.RawQuery == "" {
+		return
+	}
+	q := u.Query()
+	changed := false
+	for k := range q {
+		if trackingParams[k] {
+			q.Del(k)
+			changed = true
+		}
+	}
+	if changed {
+		u.RawQuery = q.Encode()
+	}
+}
+
+// StripTrackingParams returns the URL with known tracking parameters removed.
+// Unlike NormalizeURL it does not upgrade scheme or collapse forge paths —
+// safe to call on URLs that will be fetched, including localhost test servers.
+func StripTrackingParams(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	stripTrackingParams(u)
+	return u.String()
+}
+
+// NormalizeURL canonicalizes a URL: strips fragment, trailing slash, tracking
+// params, upgrades http to https, and collapses forge URLs to owner/repo.
 func NormalizeURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -508,6 +569,7 @@ func NormalizeURL(rawURL string) string {
 	}
 	u.Fragment = ""
 	u.Path = strings.TrimRight(u.Path, "/")
+	stripTrackingParams(u)
 	// Canonical scheme: treat http and https as the same page.
 	if u.Scheme == "http" {
 		u.Scheme = "https"
