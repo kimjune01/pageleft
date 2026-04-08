@@ -105,6 +105,7 @@ func (h *Handler) Mux() http.Handler {
 	mux.HandleFunc("GET /api/stats", h.handleStats)
 	mux.HandleFunc("GET /api/leaderboard", h.handleLeaderboard)
 	mux.HandleFunc("GET /api/frontier", h.handleFrontier)
+	mux.HandleFunc("POST /api/frontier/reject", h.handleFrontierReject)
 	mux.HandleFunc("POST /api/contribute/page", h.handleContributePage)
 	mux.HandleFunc("GET /api/work/embed", h.handleWorkEmbed)
 	mux.HandleFunc("GET /api/work/quality", h.handleWorkQuality)

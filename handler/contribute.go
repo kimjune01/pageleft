@@ -22,6 +22,75 @@ import (
 	"golang.org/x/net/html"
 )
 
+// handleFrontierReject lets workers report URLs that failed with transient errors
+// (404, 403, timeout). Deletes the URLs from the frontier. If a domain appears
+// 3+ times in a single batch, learns it as non-permissive.
+// POST /api/frontier/reject  [{"url":"...","reason":"..."},...]
+func (h *Handler) handleFrontierReject(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1*1024*1024))
+	if err != nil {
+		http.Error(w, `{"error":"read body failed"}`, http.StatusBadRequest)
+		return
+	}
+
+	var items []struct {
+		URL    string `json:"url"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(body, &items); err != nil {
+		http.Error(w, `{"error":"invalid JSON, expected array"}`, http.StatusBadRequest)
+		return
+	}
+	if len(items) == 0 {
+		http.Error(w, `{"error":"empty batch"}`, http.StatusBadRequest)
+		return
+	}
+	if len(items) > 200 {
+		http.Error(w, `{"error":"max 200 items per batch"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Count rejections per domain to detect persistent failures.
+	// Only HTTP-level failures (status codes, timeouts) count toward domain
+	// learning. Client-side skips (binary extension, etc.) are just cleanup.
+	domainCounts := make(map[string]int)
+	deleted := 0
+	for _, item := range items {
+		if item.URL == "" {
+			continue
+		}
+		h.db.DeleteFrontierURL(item.URL)
+		deleted++
+		domain := crawler.ExtractDomain(item.URL)
+		if domain == "" {
+			continue
+		}
+		// Only count server-side failures toward domain learning.
+		// Binary extensions, client-side skips, etc. say nothing about the domain.
+		if strings.Contains(item.Reason, "status ") ||
+			strings.Contains(item.Reason, "timeout") ||
+			strings.Contains(item.Reason, "fetch failed") {
+			domainCounts[domain]++
+		}
+	}
+
+	// If a domain has 5+ HTTP failures in one batch, learn it as non-permissive.
+	// Threshold is intentionally conservative — false positives are permanent.
+	learned := 0
+	for domain, count := range domainCounts {
+		if count >= 5 {
+			crawler.LearnNonPermissive("https://" + domain)
+			learned++
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"deleted":         deleted,
+		"domains_learned": learned,
+	})
+}
+
 // handleFrontier returns frontier URLs for workers to crawl.
 // GET /api/frontier?limit=10
 func (h *Handler) handleFrontier(w http.ResponseWriter, r *http.Request) {
