@@ -51,6 +51,8 @@ func (h *Handler) handleFrontierReject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Count rejections per domain to detect persistent failures.
+	// Only HTTP-level failures (status codes, timeouts) count toward domain
+	// learning. Client-side skips (binary extension, etc.) are just cleanup.
 	domainCounts := make(map[string]int)
 	deleted := 0
 	for _, item := range items {
@@ -60,15 +62,23 @@ func (h *Handler) handleFrontierReject(w http.ResponseWriter, r *http.Request) {
 		h.db.DeleteFrontierURL(item.URL)
 		deleted++
 		domain := crawler.ExtractDomain(item.URL)
-		if domain != "" {
+		if domain == "" {
+			continue
+		}
+		// Only count server-side failures toward domain learning.
+		// Binary extensions, client-side skips, etc. say nothing about the domain.
+		if strings.Contains(item.Reason, "status ") ||
+			strings.Contains(item.Reason, "timeout") ||
+			strings.Contains(item.Reason, "fetch failed") {
 			domainCounts[domain]++
 		}
 	}
 
-	// If a domain has 3+ rejected URLs in one batch, learn it as non-permissive.
+	// If a domain has 5+ HTTP failures in one batch, learn it as non-permissive.
+	// Threshold is intentionally conservative — false positives are permanent.
 	learned := 0
 	for domain, count := range domainCounts {
-		if count >= 3 {
+		if count >= 5 {
 			crawler.LearnNonPermissive("https://" + domain)
 			learned++
 		}

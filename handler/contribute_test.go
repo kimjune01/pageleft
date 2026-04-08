@@ -244,18 +244,28 @@ func TestFrontierReject_DeletesAndLearns(t *testing.T) {
 	h, cleanup := newTestHandler(t)
 	defer cleanup()
 
-	// Seed frontier with URLs from two domains: 3 from dead.example.com, 1 from ok.example.com.
+	// Seed frontier: 5 from dead.example.com, 2 from flaky.example.com, 1 binary skip.
 	h.db.AddToFrontier("https://dead.example.com/a", 0)
 	h.db.AddToFrontier("https://dead.example.com/b", 0)
 	h.db.AddToFrontier("https://dead.example.com/c", 0)
-	h.db.AddToFrontier("https://ok.example.com/x", 0)
+	h.db.AddToFrontier("https://dead.example.com/d", 0)
+	h.db.AddToFrontier("https://dead.example.com/e", 0)
+	h.db.AddToFrontier("https://flaky.example.com/x", 0)
+	h.db.AddToFrontier("https://flaky.example.com/y", 0)
+	h.db.AddToFrontier("https://imgs.example.com/pic.png", 0)
 
-	// Reject all four URLs. dead.example.com has 3+ so it should be learned.
+	// dead.example.com has 5 HTTP failures → should be learned.
+	// flaky.example.com has only 2 → should NOT be learned.
+	// imgs.example.com has "binary extension" reason → should NOT count toward learning.
 	body := `[
 		{"url":"https://dead.example.com/a","reason":"status 404"},
 		{"url":"https://dead.example.com/b","reason":"status 404"},
 		{"url":"https://dead.example.com/c","reason":"status 403"},
-		{"url":"https://ok.example.com/x","reason":"timeout"}
+		{"url":"https://dead.example.com/d","reason":"fetch failed: timeout"},
+		{"url":"https://dead.example.com/e","reason":"status 500"},
+		{"url":"https://flaky.example.com/x","reason":"timeout"},
+		{"url":"https://flaky.example.com/y","reason":"status 403"},
+		{"url":"https://imgs.example.com/pic.png","reason":"binary extension"}
 	]`
 	req := httptest.NewRequest("POST", "/api/frontier/reject", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -271,11 +281,11 @@ func TestFrontierReject_DeletesAndLearns(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if deleted := int(resp["deleted"].(float64)); deleted != 4 {
-		t.Errorf("deleted = %d, want 4", deleted)
+	if deleted := int(resp["deleted"].(float64)); deleted != 8 {
+		t.Errorf("deleted = %d, want 8", deleted)
 	}
 	if learned := int(resp["domains_learned"].(float64)); learned != 1 {
-		t.Errorf("domains_learned = %d, want 1 (dead.example.com)", learned)
+		t.Errorf("domains_learned = %d, want 1 (only dead.example.com)", learned)
 	}
 
 	// Frontier should be empty.
