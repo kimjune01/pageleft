@@ -52,13 +52,24 @@ func Resolve(rawURL string) Resolution {
 	}
 
 	// 1d. MediaWiki meta-namespace pages — Category:, Special:, Help:, User:,
-	// Wikipedia:, Wiktionary:, Talk:, File:, Template:, Portal:.
+	// Wikipedia:, Wiktionary:, Talk:, File:, Template:, Portal:, etc.
 	// These are navigation/admin pages, not content. They appear on every
-	// MediaWiki site (Wikipedia, Wikibooks, etc.) and dilute the index.
-	// Must come before the copyleft allowlist so en.wikipedia.org/wiki/Category:
-	// pages get rejected instead of allowed.
+	// MediaWiki site and dilute the index. Must come before the copyleft
+	// allowlist so en.wikipedia.org/wiki/Category: pages get rejected.
 	if isMediaWikiMetaPage(rawURL) {
 		return Resolution{Action: Block, Reason: "MediaWiki meta-namespace page"}
+	}
+
+	// 1e. MediaWiki edit/admin URLs — ?action=edit, history, raw, etc.
+	// These serve admin forms ("You do not have permission to edit"),
+	// not article content.
+	if isWikiActionURL(rawURL) {
+		return Resolution{Action: Block, Reason: "MediaWiki action URL"}
+	}
+
+	// 1f. Site-specific blocked path prefixes (catalog/listing pages).
+	if isBlockedPathPrefix(rawURL) {
+		return Resolution{Action: Block, Reason: "blocked path prefix"}
 	}
 
 	// 2. Blocked domain (exact set — platform ToS)
@@ -148,6 +159,52 @@ func isMediaWikiMetaPage(rawURL string) bool {
 		return false
 	}
 	for _, prefix := range mediaWikiMetaNamespaces {
+		if strings.HasPrefix(u.Path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// wikiActionValues are MediaWiki action= query values that serve admin
+// or edit forms instead of article content.
+var wikiActionValues = map[string]bool{
+	"edit":    true,
+	"history": true,
+	"raw":     true,
+	"submit":  true,
+	"info":    true,
+	"delete":  true,
+	"protect": true,
+	"move":    true,
+	"watch":   true,
+	"purge":   true,
+}
+
+// isWikiActionURL returns true if the URL has an ?action= query parameter
+// targeting a MediaWiki admin form rather than article content.
+// Catches /w/index.php?title=Foo&action=edit and similar.
+func isWikiActionURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	action := u.Query().Get("action")
+	return action != "" && wikiActionValues[action]
+}
+
+// blockedPathPrefixes are site-specific URL path prefixes for catalog/listing
+// pages that aren't content. Loaded from crawler/blocked_path_prefixes.txt.
+var blockedPathPrefixes []string
+
+// isBlockedPathPrefix returns true if the URL path starts with any of the
+// configured catalog/navigation prefixes (e.g. /ebooks/bookshelf/).
+func isBlockedPathPrefix(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	for _, prefix := range blockedPathPrefixes {
 		if strings.HasPrefix(u.Path, prefix) {
 			return true
 		}

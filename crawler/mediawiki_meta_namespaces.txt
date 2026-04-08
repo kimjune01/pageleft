@@ -10,11 +10,6 @@
 /wiki/Help:
 /wiki/User:
 /wiki/User_talk:
-/wiki/Wikipedia:
-/wiki/Wikipedia_talk:
-/wiki/Wiktionary:
-/wiki/Wikibooks:
-/wiki/Wikisource:
 /wiki/Talk:
 /wiki/File:
 /wiki/Template:
@@ -23,3 +18,18 @@
 /wiki/MediaWiki:
 /wiki/Module:
 /wiki/Draft:
+
+# Project-specific self-named namespaces. Each Wikimedia project has its
+# own meta namespace following the pattern /wiki/<ProjectName>:
+/wiki/Wikipedia:
+/wiki/Wikipedia_talk:
+/wiki/Wiktionary:
+/wiki/Wikibooks:
+/wiki/Wikisource:
+/wiki/Wikivoyage:
+/wiki/Wikiquote:
+/wiki/Wikinews:
+/wiki/Wikiversity:
+/wiki/Wikidata:
+/wiki/Commons:
+/wiki/Meta:

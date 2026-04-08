@@ -109,6 +109,78 @@ func TestResolveBlocksFoundationWikimedia(t *testing.T) {
 	}
 }
 
+func TestResolveBlocksWikimediaSiblings(t *testing.T) {
+	tests := []string{
+		"https://commons.wikimedia.org/wiki/Main_Page",
+		"https://meta.wikimedia.org/wiki/Wikivoyage/Lounge",
+		"https://species.wikimedia.org/wiki/Felis_catus",
+		"https://www.wikidata.org/wiki/Q42",
+	}
+	for _, u := range tests {
+		res := Resolve(u)
+		if res.Action != Block {
+			t.Errorf("Resolve(%q) = %v, want Block", u, res.Action)
+		}
+	}
+}
+
+func TestIsWikiActionURL(t *testing.T) {
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		{"https://en.wikiquote.org/w/index.php?title=Apple_Inc.&action=edit&section=5", true},
+		{"https://en.wikipedia.org/w/index.php?title=Cat&action=history", true},
+		{"https://en.wikipedia.org/w/index.php?title=Cat&action=raw", true},
+		{"https://en.wikipedia.org/w/index.php?title=Cat&action=submit", true},
+
+		// Article URLs without action: not blocked
+		{"https://en.wikipedia.org/wiki/Cat", false},
+		{"https://en.wikipedia.org/w/index.php?title=Cat", false},
+
+		// Non-wiki URLs with action= for content: not blocked
+		{"https://example.com/forum?action=show&topic=42", false},
+	}
+	for _, tt := range tests {
+		got := isWikiActionURL(tt.url)
+		if got != tt.want {
+			t.Errorf("isWikiActionURL(%q) = %v, want %v", tt.url, got, tt.want)
+		}
+	}
+}
+
+func TestResolveBlocksGutenbergCatalog(t *testing.T) {
+	tests := []string{
+		"https://www.gutenberg.org/ebooks/bookshelf/637",
+		"https://www.gutenberg.org/ebooks/subject/138",
+	}
+	for _, u := range tests {
+		res := Resolve(u)
+		if res.Action != Block {
+			t.Errorf("Resolve(%q) = %v, want Block", u, res.Action)
+		}
+	}
+
+	// Real ebook pages still allowed
+	res := Resolve("https://www.gutenberg.org/ebooks/42671")
+	if res.Action == Block {
+		t.Errorf("Resolve(real ebook) should not be blocked, got %v", res.Action)
+	}
+}
+
+func TestResolveBlocksExtendedWikiMetaNamespaces(t *testing.T) {
+	tests := []string{
+		"https://en.wikivoyage.org/wiki/Wikivoyage:Maintenance_panel",
+		"https://en.wikiquote.org/wiki/Wikiquote:Sandbox",
+	}
+	for _, u := range tests {
+		res := Resolve(u)
+		if res.Action != Block {
+			t.Errorf("Resolve(%q) = %v, want Block", u, res.Action)
+		}
+	}
+}
+
 func TestShouldBlockFrontierFromBlocksAllWikiCrosslinks(t *testing.T) {
 	// English Wikipedia article shouldn't dump its language sidebar into the frontier.
 	filter := ShouldBlockFrontierFrom("https://en.wikipedia.org/wiki/Cat")
