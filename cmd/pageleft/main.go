@@ -49,6 +49,8 @@ func main() {
 		cmdEmbedBackfill(dbPath)
 	case "prune-frontier":
 		cmdPruneFrontier(dbPath)
+	case "prune-pages":
+		cmdPrunePages(dbPath)
 	case "seed-blocklist":
 		cmdSeedBlocklist(dbPath)
 	default:
@@ -391,6 +393,38 @@ func cmdPruneFrontier(dbPath string) {
 
 	after, _ := db.FrontierSize()
 	log.Printf("pruned %d entries, frontier after: %d", removed, after)
+}
+
+// cmdPrunePages deletes indexed pages whose URLs are now blocked by the
+// resolve chain. Use this after tightening the frontier policy to retroactively
+// remove content that slipped in under older rules.
+func cmdPrunePages(dbPath string) {
+	db, err := platform.NewDB(dbPath)
+	if err != nil {
+		log.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	before, _ := db.PageCount()
+	log.Printf("pages before: %d", before)
+
+	// Same filter as the resolve chain — anything Resolve() would now Block
+	// gets retroactively deleted.
+	removed, err := db.PrunePages(func(u string) bool {
+		return crawler.Resolve(u).Action == crawler.Block
+	})
+	if err != nil {
+		log.Fatalf("prune: %v", err)
+	}
+
+	after, _ := db.PageCount()
+	log.Printf("pruned %d pages, pages after: %d", removed, after)
+
+	// Also clean the frontier of anything matching the new policy.
+	frontierBefore, _ := db.FrontierSize()
+	frontierRemoved, _ := db.PruneFrontier(crawler.ShouldBlockFrontier)
+	frontierAfter, _ := db.FrontierSize()
+	log.Printf("frontier: %d → %d (pruned %d)", frontierBefore, frontierAfter, frontierRemoved)
 }
 
 func cmdSeedBlocklist(dbPath string) {
