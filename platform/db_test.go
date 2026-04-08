@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"testing"
+	"time"
 )
 
 func testDB(t *testing.T) *DB {
@@ -111,6 +112,81 @@ func TestQualityDuplicateReviewRejected(t *testing.T) {
 	q := getQuality(t, db, pageID)
 	if math.Abs(q-0.8) > 0.001 {
 		t.Fatalf("quality after rejected dup: got %f, want 0.8", q)
+	}
+}
+
+func TestMigrate_IsIdempotent(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+	// First migrate ran in NewDB. Run a second time and confirm no error.
+	if err := db.migrate(); err != nil {
+		t.Fatalf("second migrate: %v", err)
+	}
+	// And a third for good measure.
+	if err := db.migrate(); err != nil {
+		t.Fatalf("third migrate: %v", err)
+	}
+}
+
+func TestInsertPage_StoresETagAndLastModified(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+
+	now := time.Now().Truncate(time.Second)
+	p := &Page{
+		URL:           "https://example.com/test",
+		Title:         "Test",
+		TextContent:   "hello",
+		LicenseURL:    "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType:   "CC BY-SA",
+		ContentHash:   "abc123",
+		CrawledAt:     now,
+		ETag:          `"v1-deadbeef"`,
+		LastModified:  "Wed, 21 Oct 2026 07:28:00 GMT",
+	}
+	if _, err := db.InsertPage(p); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	got, err := db.GetPageByURL("https://example.com/test")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.ETag != `"v1-deadbeef"` {
+		t.Errorf("ETag = %q, want %q", got.ETag, `"v1-deadbeef"`)
+	}
+	if got.LastModified != "Wed, 21 Oct 2026 07:28:00 GMT" {
+		t.Errorf("LastModified = %q, want header value", got.LastModified)
+	}
+	if got.LastValidated.IsZero() {
+		t.Error("LastValidated should default to CrawledAt for fresh insert, got zero time")
+	}
+	if got.ConsecutiveFailures != 0 {
+		t.Errorf("ConsecutiveFailures = %d, want 0", got.ConsecutiveFailures)
+	}
+}
+
+func TestInsertPage_LastValidatedDefaultsToCrawledAt(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+
+	crawled := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	p := &Page{
+		URL:         "https://example.com/no-validated",
+		LicenseURL:  "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType: "CC BY-SA",
+		CrawledAt:   crawled,
+		// LastValidated intentionally zero
+	}
+	if _, err := db.InsertPage(p); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	got, err := db.GetPageByURL("https://example.com/no-validated")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !got.LastValidated.Equal(crawled) {
+		t.Errorf("LastValidated = %v, want %v (defaulted to CrawledAt)", got.LastValidated, crawled)
 	}
 }
 

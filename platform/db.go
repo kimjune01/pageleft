@@ -102,18 +102,22 @@ func (bf *urlBloomFilter) save(path string) error {
 }
 
 type Page struct {
-	ID          int64
-	URL         string
-	Title       string
-	TextContent string
-	LicenseURL  string
-	LicenseType string
-	Embedding   []float64
-	PageRank    float64
-	Quality     float64
-	Compilable  bool
-	CrawledAt   time.Time
-	ContentHash string
+	ID                  int64
+	URL                 string
+	Title               string
+	TextContent         string
+	LicenseURL          string
+	LicenseType         string
+	Embedding           []float64
+	PageRank            float64
+	Quality             float64
+	Compilable          bool
+	CrawledAt           time.Time
+	ContentHash         string
+	ETag                string
+	LastModified        string
+	LastValidated       time.Time
+	ConsecutiveFailures int
 }
 
 type Link struct {
@@ -317,6 +321,13 @@ func (db *DB) migrate() error {
 	db.conn.Exec("ALTER TABLE quality_reviews ADD COLUMN contributor TEXT NOT NULL DEFAULT ''")
 	db.conn.Exec("ALTER TABLE frontier ADD COLUMN inbound INTEGER NOT NULL DEFAULT 1")
 	db.conn.Exec("CREATE INDEX IF NOT EXISTS idx_frontier_inbound ON frontier(inbound DESC)")
+	// Layer 0: HTTP cache validators and revalidation tracking.
+	// etag/last_modified power conditional GETs (If-None-Match, If-Modified-Since).
+	// last_validated/consecutive_failures power the future prune-stale command.
+	db.conn.Exec("ALTER TABLE pages ADD COLUMN etag TEXT NOT NULL DEFAULT ''")
+	db.conn.Exec("ALTER TABLE pages ADD COLUMN last_modified TEXT NOT NULL DEFAULT ''")
+	db.conn.Exec("ALTER TABLE pages ADD COLUMN last_validated DATETIME")
+	db.conn.Exec("ALTER TABLE pages ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0")
 	return nil
 }
 
@@ -327,15 +338,27 @@ func (db *DB) InsertPage(p *Page) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("marshal embedding: %w", err)
 	}
+	// last_validated tracks when we last confirmed the page is alive. For a
+	// fresh insert that's the same moment as crawled_at; if the caller didn't
+	// set it explicitly, default to crawled_at.
+	lastValidated := p.LastValidated
+	if lastValidated.IsZero() {
+		lastValidated = p.CrawledAt
+	}
 	res, err := db.conn.Exec(`
-		INSERT INTO pages (url, title, text_content, license_url, license_type, embedding, crawled_at, content_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO pages (url, title, text_content, license_url, license_type, embedding, crawled_at, content_hash, etag, last_modified, last_validated, consecutive_failures)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(url) DO UPDATE SET
 			title=excluded.title, text_content=excluded.text_content,
 			license_url=excluded.license_url, license_type=excluded.license_type,
 			embedding=excluded.embedding, crawled_at=excluded.crawled_at,
-			content_hash=excluded.content_hash`,
-		p.URL, p.Title, p.TextContent, p.LicenseURL, p.LicenseType, string(embJSON), p.CrawledAt, p.ContentHash)
+			content_hash=excluded.content_hash,
+			etag=excluded.etag, last_modified=excluded.last_modified,
+			last_validated=excluded.last_validated,
+			consecutive_failures=excluded.consecutive_failures`,
+		p.URL, p.Title, p.TextContent, p.LicenseURL, p.LicenseType, string(embJSON),
+		p.CrawledAt, p.ContentHash,
+		p.ETag, p.LastModified, lastValidated, p.ConsecutiveFailures)
 	if err != nil {
 		return 0, fmt.Errorf("insert page: %w", err)
 	}
@@ -351,19 +374,23 @@ func (db *DB) InsertPage(p *Page) (int64, error) {
 func (db *DB) GetPageByURL(url string) (*Page, error) {
 	p := &Page{}
 	var embJSON sql.NullString
-	err := db.conn.QueryRow("SELECT id, url, title, text_content, license_url, license_type, embedding, pagerank, quality, compilable, crawled_at, content_hash FROM pages WHERE url = ?", url).
-		Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseURL, &p.LicenseType, &embJSON, &p.PageRank, &p.Quality, &p.Compilable, &p.CrawledAt, &p.ContentHash)
+	var lastValidated sql.NullTime
+	err := db.conn.QueryRow("SELECT id, url, title, text_content, license_url, license_type, embedding, pagerank, quality, compilable, crawled_at, content_hash, etag, last_modified, last_validated, consecutive_failures FROM pages WHERE url = ?", url).
+		Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseURL, &p.LicenseType, &embJSON, &p.PageRank, &p.Quality, &p.Compilable, &p.CrawledAt, &p.ContentHash, &p.ETag, &p.LastModified, &lastValidated, &p.ConsecutiveFailures)
 	if err != nil {
 		return nil, err
 	}
 	if embJSON.Valid && embJSON.String != "" {
 		json.Unmarshal([]byte(embJSON.String), &p.Embedding)
 	}
+	if lastValidated.Valid {
+		p.LastValidated = lastValidated.Time
+	}
 	return p, nil
 }
 
 func (db *DB) AllPages() ([]*Page, error) {
-	rows, err := db.conn.Query("SELECT id, url, title, text_content, license_url, license_type, embedding, pagerank, quality, compilable, crawled_at, content_hash FROM pages")
+	rows, err := db.conn.Query("SELECT id, url, title, text_content, license_url, license_type, embedding, pagerank, quality, compilable, crawled_at, content_hash, etag, last_modified, last_validated, consecutive_failures FROM pages")
 	if err != nil {
 		return nil, err
 	}
@@ -373,11 +400,15 @@ func (db *DB) AllPages() ([]*Page, error) {
 	for rows.Next() {
 		p := &Page{}
 		var embJSON sql.NullString
-		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseURL, &p.LicenseType, &embJSON, &p.PageRank, &p.Quality, &p.Compilable, &p.CrawledAt, &p.ContentHash); err != nil {
+		var lastValidated sql.NullTime
+		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseURL, &p.LicenseType, &embJSON, &p.PageRank, &p.Quality, &p.Compilable, &p.CrawledAt, &p.ContentHash, &p.ETag, &p.LastModified, &lastValidated, &p.ConsecutiveFailures); err != nil {
 			return nil, err
 		}
 		if embJSON.Valid && embJSON.String != "" {
 			json.Unmarshal([]byte(embJSON.String), &p.Embedding)
+		}
+		if lastValidated.Valid {
+			p.LastValidated = lastValidated.Time
 		}
 		pages = append(pages, p)
 	}

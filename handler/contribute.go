@@ -200,14 +200,18 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.db.LogContribution("crawl", platform.ContributorHash(r.RemoteAddr))
+	now := time.Now()
 	page := &platform.Page{
-		URL:         crawler.CanonicalPageURL(sub.URL),
-		Title:       sub.Title,
-		TextContent: sub.TextContent,
-		LicenseURL:  result.License.URL,
-		LicenseType: result.License.Type,
-		ContentHash: sub.ContentHash,
-		CrawledAt:   time.Now(),
+		URL:           crawler.CanonicalPageURL(sub.URL),
+		Title:         sub.Title,
+		TextContent:   sub.TextContent,
+		LicenseURL:    result.License.URL,
+		LicenseType:   result.License.Type,
+		ContentHash:   sub.ContentHash,
+		CrawledAt:     now,
+		ETag:          result.ETag,
+		LastModified:  result.LastModified,
+		LastValidated: now,
 	}
 
 	pageID, err := h.db.InsertPageWithLinks(page, sub.Links, crawler.ShouldBlockFrontierFrom(sub.URL))
@@ -625,15 +629,17 @@ func (h *Handler) handleContributeCompilable(w http.ResponseWriter, r *http.Requ
 
 // fetchResult holds the parsed page and license from a verification fetch.
 type fetchResult struct {
-	License  *crawler.LicenseInfo
-	Doc      *html.Node // nil for PDFs
-	FinalURL string
-	BodyHash string
+	License      *crawler.LicenseInfo
+	Doc          *html.Node // nil for PDFs
+	FinalURL     string
+	BodyHash     string
+	ETag         string
+	LastModified string
 	// PDF-only fields
-	IsPDF      bool
-	PDFTitle   string
-	PDFText    string
-	PDFChunks  []string
+	IsPDF     bool
+	PDFTitle  string
+	PDFText   string
+	PDFChunks []string
 }
 
 // fetchAndVerify runs the filter chain (crawler.Resolve), fetches the URL,
@@ -698,6 +704,8 @@ func fetchAndVerify(pageURL string) (*fetchResult, error) {
 
 	h := fmt.Sprintf("%x", sha256.Sum256(bodyBytes))
 	finalURL := resp.Request.URL.String()
+	etag := resp.Header.Get("ETag")
+	lastModified := resp.Header.Get("Last-Modified")
 
 	if isPDF {
 		if res.License == nil {
@@ -709,6 +717,7 @@ func fetchAndVerify(pageURL string) (*fetchResult, error) {
 		}
 		return &fetchResult{
 			License: res.License, FinalURL: finalURL, BodyHash: h,
+			ETag: etag, LastModified: lastModified,
 			IsPDF: true, PDFTitle: title, PDFText: text, PDFChunks: chunks,
 		}, nil
 	}
@@ -727,7 +736,10 @@ func fetchAndVerify(pageURL string) (*fetchResult, error) {
 		return nil, fmt.Errorf("no copyleft license found")
 	}
 
-	return &fetchResult{License: license, Doc: doc, FinalURL: finalURL, BodyHash: h}, nil
+	return &fetchResult{
+		License: license, Doc: doc, FinalURL: finalURL, BodyHash: h,
+		ETag: etag, LastModified: lastModified,
+	}, nil
 }
 
 // fetchForgeReadme fetches a raw README from a forge and wraps it in HTML.
