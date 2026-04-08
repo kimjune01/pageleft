@@ -327,6 +327,223 @@ func TestInsertPage_LastValidatedDefaultsToCrawledAt(t *testing.T) {
 	}
 }
 
+// --- Layer 1: revalidation ---
+
+func TestPagesForRevalidation_OldestFirst(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+
+	// Insert pages with different last_validated values, plus one never-validated.
+	mkPage := func(url string, lv time.Time) {
+		p := &Page{
+			URL:           url,
+			LicenseURL:    "https://creativecommons.org/licenses/by-sa/4.0/",
+			LicenseType:   "CC BY-SA",
+			CrawledAt:     time.Now(),
+			LastValidated: lv,
+		}
+		if _, err := db.InsertPage(p); err != nil {
+			t.Fatalf("insert %s: %v", url, err)
+		}
+	}
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	mid := time.Date(2023, 6, 1, 0, 0, 0, 0, time.UTC)
+	recent := time.Date(2026, 4, 8, 0, 0, 0, 0, time.UTC)
+
+	mkPage("https://example.com/recent", recent)
+	mkPage("https://example.com/old", old)
+	mkPage("https://example.com/mid", mid)
+
+	// And a never-validated page (last_validated NULL). Insert via raw SQL
+	// because InsertPage defaults LastValidated to CrawledAt.
+	if _, err := db.conn.Exec(`
+		INSERT INTO pages (url, license_url, license_type, last_validated)
+		VALUES ('https://example.com/never', '', '', NULL)
+	`); err != nil {
+		t.Fatalf("insert never-validated: %v", err)
+	}
+
+	got, err := db.PagesForRevalidation(0)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("got %d pages, want 4", len(got))
+	}
+
+	// Never-validated should come first, then oldest, mid, recent.
+	wantOrder := []string{
+		"https://example.com/never",
+		"https://example.com/old",
+		"https://example.com/mid",
+		"https://example.com/recent",
+	}
+	for i, want := range wantOrder {
+		if got[i].URL != want {
+			t.Errorf("position %d: got %s, want %s", i, got[i].URL, want)
+		}
+	}
+}
+
+func TestUpdatePageValidators_BumpsLastValidated(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+
+	id, err := db.InsertPage(&Page{
+		URL:           "https://example.com/test",
+		LicenseURL:    "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType:   "CC BY-SA",
+		CrawledAt:     time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		ETag:          `"v1"`,
+		LastModified:  "Wed, 01 Jan 2026 00:00:00 GMT",
+		LastValidated: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newTime := time.Date(2026, 4, 8, 12, 0, 0, 0, time.UTC)
+	if err := db.UpdatePageValidators(id, `"v2"`, "Mon, 08 Apr 2026 12:00:00 GMT", newTime, 0); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	got, err := db.GetPageByURL("https://example.com/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ETag != `"v2"` {
+		t.Errorf("ETag = %q, want %q", got.ETag, `"v2"`)
+	}
+	if !got.LastValidated.Equal(newTime) {
+		t.Errorf("LastValidated = %v, want %v", got.LastValidated, newTime)
+	}
+}
+
+func TestUpdatePageContent_RefreshesAllFields(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+
+	id, err := db.InsertPage(&Page{
+		URL:                 "https://example.com/test",
+		TextContent:         "old content",
+		ContentHash:         "oldhash",
+		LicenseURL:          "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType:         "CC BY-SA",
+		CrawledAt:           time.Now(),
+		ConsecutiveFailures: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newTime := time.Date(2026, 4, 8, 0, 0, 0, 0, time.UTC)
+	newChunks := []Chunk{{Idx: 0, Text: "new chunk"}}
+	if err := db.UpdatePageContent(id, "new content", "newhash", `"v2"`, "Mon, 08 Apr 2026 00:00:00 GMT", newTime, newChunks); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	got, err := db.GetPageByURL("https://example.com/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TextContent != "new content" {
+		t.Errorf("TextContent = %q, want %q", got.TextContent, "new content")
+	}
+	if got.ContentHash != "newhash" {
+		t.Errorf("ContentHash = %q, want %q", got.ContentHash, "newhash")
+	}
+	if got.ConsecutiveFailures != 0 {
+		t.Errorf("ConsecutiveFailures = %d, want 0 (should reset)", got.ConsecutiveFailures)
+	}
+}
+
+func TestIncrementPageFailures(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+
+	id, err := db.InsertPage(&Page{
+		URL:         "https://example.com/test",
+		LicenseURL:  "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType: "CC BY-SA",
+		CrawledAt:   time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for want := 1; want <= 3; want++ {
+		got, err := db.IncrementPageFailures(id, time.Now())
+		if err != nil {
+			t.Fatalf("increment: %v", err)
+		}
+		if got != want {
+			t.Errorf("after %d increments: got %d, want %d", want, got, want)
+		}
+	}
+}
+
+func TestDeletePage_CascadesChunksLinksReviews(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+
+	pageA, err := db.InsertPage(&Page{
+		URL:         "https://example.com/a",
+		LicenseURL:  "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType: "CC BY-SA",
+		CrawledAt:   time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageB, err := db.InsertPage(&Page{
+		URL:         "https://example.com/b",
+		LicenseURL:  "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType: "CC BY-SA",
+		CrawledAt:   time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add chunks, an outbound link from A→B, and a quality review on A.
+	if err := db.InsertChunks(pageA, []Chunk{{PageID: pageA, Idx: 0, Text: "x"}}); err != nil {
+		t.Fatalf("insert chunks: %v", err)
+	}
+	if err := db.InsertLink(pageA, pageB, "ref"); err != nil {
+		t.Fatalf("insert link: %v", err)
+	}
+	if err := db.SubmitQualityScore(pageA, 0.8, "test", "test-contributor"); err != nil {
+		t.Fatalf("insert review: %v", err)
+	}
+
+	if err := db.DeletePage(pageA); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	// Page should be gone.
+	if _, err := db.GetPageByURL("https://example.com/a"); err != sql.ErrNoRows {
+		t.Errorf("page should be deleted, got err = %v", err)
+	}
+	// Chunks gone (FK cascade).
+	var chunkCount int
+	db.conn.QueryRow("SELECT COUNT(*) FROM chunks WHERE page_id = ?", pageA).Scan(&chunkCount)
+	if chunkCount != 0 {
+		t.Errorf("chunks remaining: %d, want 0", chunkCount)
+	}
+	// Reviews gone (FK cascade).
+	var reviewCount int
+	db.conn.QueryRow("SELECT COUNT(*) FROM quality_reviews WHERE page_id = ?", pageA).Scan(&reviewCount)
+	if reviewCount != 0 {
+		t.Errorf("reviews remaining: %d, want 0", reviewCount)
+	}
+	// Links gone (explicit delete in DeletePage — no FK cascade on links table).
+	var linkCount int
+	db.conn.QueryRow("SELECT COUNT(*) FROM links WHERE from_page_id = ? OR to_page_id = ?", pageA, pageA).Scan(&linkCount)
+	if linkCount != 0 {
+		t.Errorf("links remaining: %d, want 0", linkCount)
+	}
+}
+
 func TestNormalizeURL_StripsTrackingParams(t *testing.T) {
 	tests := []struct {
 		name string
