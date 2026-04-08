@@ -761,6 +761,8 @@ func fetchForgeReadme(pageURL string, res crawler.Resolution) (*fetchResult, err
 	}
 
 	h := fmt.Sprintf("%x", sha256.Sum256(body))
+	etag := resp.Header.Get("ETag")
+	lastModified := resp.Header.Get("Last-Modified")
 
 	// Wrap markdown lines in <p> tags for the paragraph extractor
 	htmlStr := "<html><body><article>"
@@ -778,7 +780,10 @@ func fetchForgeReadme(pageURL string, res crawler.Resolution) (*fetchResult, err
 		return nil, fmt.Errorf("parse README: %w", err)
 	}
 
-	return &fetchResult{License: res.License, Doc: doc, FinalURL: pageURL, BodyHash: h}, nil
+	return &fetchResult{
+		License: res.License, Doc: doc, FinalURL: pageURL, BodyHash: h,
+		ETag: etag, LastModified: lastModified,
+	}, nil
 }
 
 // extractPDFContent extracts text from PDF bytes, splits into chunks by page.
