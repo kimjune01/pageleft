@@ -14,6 +14,7 @@ import (
 //go:embed binary_extensions.txt
 //go:embed mediawiki_meta_namespaces.txt
 //go:embed wikimedia_projects.txt
+//go:embed blocked_path_prefixes.txt
 var domainFiles embed.FS
 
 type DomainLicense struct {
@@ -40,6 +41,7 @@ func init() {
 	binaryExtensions = loadStringList("binary_extensions.txt")
 	mediaWikiMetaNamespaces = loadStringList("mediawiki_meta_namespaces.txt")
 	wikimediaProjects = loadStringList("wikimedia_projects.txt")
+	blockedPathPrefixes = loadStringList("blocked_path_prefixes.txt")
 }
 
 // InitBloomFilters creates both filters.

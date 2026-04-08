@@ -1,0 +1,10 @@
+# Site-specific URL path prefixes that point to catalog/listing/navigation
+# pages rather than content. Distinct from mediawiki_meta_namespaces.txt
+# (which is wiki-specific) — this is for non-wiki sites that publish content
+# alongside catalog navigation.
+#
+# Format: full path prefix, one per line. Comments start with #.
+
+# Project Gutenberg catalog navigation
+/ebooks/bookshelf/
+/ebooks/subject/

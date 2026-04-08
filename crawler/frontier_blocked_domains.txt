@@ -66,3 +66,11 @@ wiktionary.org
 # Wikimedia Foundation governance wiki — meta/policy content with path-based
 # language variants (/nb, /de, /es) that bypass the subdomain language check.
 foundation.wikimedia.org
+
+# Wikimedia non-text projects — not language-versioned, not text expressions.
+commons.wikimedia.org
+meta.wikimedia.org
+species.wikimedia.org
+
+# Wikidata — structured RDF-style data records (Q-codes), not text expressions.
+wikidata.org
