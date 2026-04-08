@@ -449,10 +449,12 @@ func (db *DB) PagesForRevalidation(limit int) ([]*Page, error) {
 		etag, last_modified, last_validated, consecutive_failures
 		FROM pages
 		ORDER BY last_validated IS NULL DESC, last_validated ASC`
+	args := []any{}
 	if limit > 0 {
-		q += fmt.Sprintf(" LIMIT %d", limit)
+		q += " LIMIT ?"
+		args = append(args, limit)
 	}
-	rows, err := db.conn.Query(q)
+	rows, err := db.conn.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -489,12 +491,15 @@ func (db *DB) UpdatePageValidators(id int64, etag, lastModified string, lastVali
 }
 
 // UpdatePageContent updates text_content + content_hash + validators after a
-// changed-200 response. Resets consecutive_failures to 0. Does not touch chunks
-// (the caller is responsible for re-chunking if needed).
+// changed-200 response. Resets consecutive_failures to 0 and clears the
+// page-level embedding (which was averaged from chunks of the old content
+// and is now stale). The chunk-level embeddings are dropped via the
+// caller's ReplacePageChunks call; the embed work queue will re-embed.
 func (db *DB) UpdatePageContent(id int64, textContent, contentHash, etag, lastModified string, lastValidated time.Time) error {
 	_, err := db.conn.Exec(`
 		UPDATE pages SET text_content = ?, content_hash = ?,
-			etag = ?, last_modified = ?, last_validated = ?, consecutive_failures = 0
+			etag = ?, last_modified = ?, last_validated = ?,
+			consecutive_failures = 0, embedding = NULL
 		WHERE id = ?`,
 		textContent, contentHash, etag, lastModified, lastValidated, id)
 	return err
@@ -512,37 +517,61 @@ func (db *DB) IncrementPageFailures(id int64) (int, error) {
 	return count, err
 }
 
-// DeletePage removes a page and cascades to chunks, links, and quality_reviews.
-// Used by the prune-stale command for 410 Gone responses, persistent 404s,
-// and off-domain redirects.
+// DeletePage removes a page row in a transaction. The chunks and
+// quality_reviews tables have ON DELETE CASCADE, so they're cleaned up
+// automatically when the foreign key fires (PRAGMA foreign_keys = ON is
+// set in migrate). The links table has no cascade — delete its rows
+// explicitly.
 func (db *DB) DeletePage(id int64) error {
-	if _, err := db.conn.Exec("DELETE FROM chunks WHERE page_id = ?", id); err != nil {
+	tx, err := db.conn.Begin()
+	if err != nil {
 		return err
 	}
-	if _, err := db.conn.Exec("DELETE FROM links WHERE from_page_id = ? OR to_page_id = ?", id, id); err != nil {
-		return err
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM links WHERE from_page_id = ? OR to_page_id = ?", id, id); err != nil {
+		return fmt.Errorf("delete links: %w", err)
 	}
-	if _, err := db.conn.Exec("DELETE FROM quality_reviews WHERE page_id = ?", id); err != nil {
-		return err
+	if _, err := tx.Exec("DELETE FROM pages WHERE id = ?", id); err != nil {
+		return fmt.Errorf("delete page: %w", err)
 	}
-	if _, err := db.conn.Exec("DELETE FROM pages WHERE id = ?", id); err != nil {
-		return err
-	}
-	return nil
+	return tx.Commit()
 }
 
-// ReplacePageChunks deletes all existing chunks for a page and inserts new ones.
-// Used after content changes during revalidation. New chunks have NULL embeddings,
-// which the embed work queue will pick up automatically.
+// ReplacePageChunks deletes all existing chunks for a page and inserts new ones
+// in a transaction. Used after content changes during revalidation. New chunks
+// have NULL embeddings, which the embed work queue will pick up automatically.
 func (db *DB) ReplacePageChunks(pageID int64, chunks []Chunk) error {
-	if _, err := db.conn.Exec("DELETE FROM chunks WHERE page_id = ?", pageID); err != nil {
+	tx, err := db.conn.Begin()
+	if err != nil {
 		return err
 	}
-	for i := range chunks {
-		chunks[i].PageID = pageID
-		chunks[i].Idx = i
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM chunks WHERE page_id = ?", pageID); err != nil {
+		return fmt.Errorf("delete chunks: %w", err)
 	}
-	return db.InsertChunks(pageID, chunks)
+	for i, c := range chunks {
+		if db.chunkBloom != nil {
+			db.chunkBloom.add(c.Text)
+		}
+		var embJSON *string
+		if len(c.Embedding) > 0 {
+			b, err := json.Marshal(c.Embedding)
+			if err != nil {
+				return fmt.Errorf("marshal chunk embedding: %w", err)
+			}
+			s := string(b)
+			embJSON = &s
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO chunks (page_id, idx, text, embedding)
+			VALUES (?, ?, ?, ?)`,
+			pageID, i, c.Text, embJSON); err != nil {
+			return fmt.Errorf("insert chunk: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 func (db *DB) UpdateEmbedding(id int64, emb []float64) error {

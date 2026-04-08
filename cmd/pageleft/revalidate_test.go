@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -237,6 +238,76 @@ func TestRevalidatePage_404OverThresholdDeletes(t *testing.T) {
 	}
 	if _, err := db.GetPageByURL(srv.URL + "/page"); err == nil {
 		t.Error("page should be deleted at threshold")
+	}
+}
+
+func TestRevalidatePage_OffDomainRedirectDeletes(t *testing.T) {
+	// Target server lives on a different host. httptest uses 127.0.0.1, so we
+	// rewrite the redirect target to "localhost" — same machine, different
+	// hostname string. The off-domain check compares hostnames, not IPs.
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("hello from target"))
+	}))
+	defer target.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetURL := strings.Replace(target.URL, "127.0.0.1", "localhost", 1) + "/elsewhere"
+		http.Redirect(w, r, targetURL, http.StatusFound)
+	}))
+	defer srv.Close()
+
+	db := newRevalidateTestDB(t)
+	if _, err := db.InsertPage(&platform.Page{
+		URL:         srv.URL + "/page",
+		LicenseURL:  "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType: "CC BY-SA",
+		CrawledAt:   time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p, _ := db.GetPageByURL(srv.URL + "/page")
+	action, err := revalidatePage(db, &http.Client{Timeout: 5 * time.Second}, p)
+	if err != nil {
+		t.Fatalf("revalidate: %v", err)
+	}
+	if action != actionDeleted {
+		t.Errorf("action = %s, want deleted (off-domain redirect)", action)
+	}
+	if _, err := db.GetPageByURL(srv.URL + "/page"); err == nil {
+		t.Error("page should be deleted after off-domain redirect")
+	}
+}
+
+func TestRevalidatePage_SendsRobotsUserAgent(t *testing.T) {
+	var gotUserAgent string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUserAgent = r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer srv.Close()
+
+	db := newRevalidateTestDB(t)
+	if _, err := db.InsertPage(&platform.Page{
+		URL:         srv.URL + "/page",
+		LicenseURL:  "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType: "CC BY-SA",
+		CrawledAt:   time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p, _ := db.GetPageByURL(srv.URL + "/page")
+	if _, err := revalidatePage(db, &http.Client{Timeout: 5 * time.Second}, p); err != nil {
+		t.Fatalf("revalidate: %v", err)
+	}
+	if gotUserAgent == "" {
+		t.Error("User-Agent header missing")
+	}
+	// We use crawler.RobotsUserAgent — confirm it's not the default Go client UA.
+	if strings.HasPrefix(gotUserAgent, "Go-http-client") {
+		t.Errorf("User-Agent = %q, want crawler.RobotsUserAgent", gotUserAgent)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"golang.org/x/net/html"
 
 	"github.com/kimjune01/pageleft/crawler"
+	"github.com/kimjune01/pageleft/handler"
 	"github.com/kimjune01/pageleft/platform"
 )
 
@@ -37,7 +38,14 @@ const (
 // remote server. Transient remote failures are reported via actionTransient
 // with a nil error.
 func revalidatePage(db *platform.DB, client *http.Client, p *platform.Page) (revalidationAction, error) {
-	req, err := http.NewRequest("GET", p.URL, nil)
+	// For forge pages (github.com/owner/repo), the actual content lives at
+	// raw.githubusercontent.com. crawler.Resolve returns the rewritten URL.
+	// For everything else, FetchURL is empty and we use p.URL as-is.
+	fetchURL := p.URL
+	if res := crawler.Resolve(p.URL); res.FetchURL != "" {
+		fetchURL = res.FetchURL
+	}
+	req, err := http.NewRequest("GET", fetchURL, nil)
 	if err != nil {
 		return actionTransient, fmt.Errorf("build request: %w", err)
 	}
@@ -114,15 +122,7 @@ func revalidatePage(db *platform.DB, client *http.Client, p *platform.Page) (rev
 		return actionTransient, nil
 	}
 
-	// 200 OK — read body and compare content_hash.
-	contentType := resp.Header.Get("Content-Type")
-	if !strings.Contains(contentType, "text/html") {
-		// Layer 1 only revalidates HTML pages. PDFs and other content types
-		// are skipped — Layer 2 can extend this if needed.
-		log.Printf("  skipping non-HTML %s: %s", contentType, p.URL)
-		return actionTransient, nil
-	}
-
+	// 200 OK — read body, check content_type for dispatch, compare hash.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024))
 	if err != nil {
 		return actionTransient, fmt.Errorf("read body: %w", err)
@@ -140,21 +140,15 @@ func revalidatePage(db *platform.DB, client *http.Client, p *platform.Page) (rev
 		return actionUnchanged, nil
 	}
 
-	// Content changed. Re-extract text and chunks.
-	doc, err := html.Parse(strings.NewReader(string(body)))
+	// Content changed. Dispatch by content type.
+	newText, chunks, err := extractRevalidatedContent(resp.Header.Get("Content-Type"), body)
 	if err != nil {
-		return actionTransient, fmt.Errorf("parse HTML: %w", err)
-	}
-	newText := crawler.ExtractText(doc)
-	if err := db.UpdatePageContent(p.ID, newText, newHash, newETag, newLastModified, now); err != nil {
-		return actionUpdated, fmt.Errorf("update content: %w", err)
+		log.Printf("  skipping %s: %v", p.URL, err)
+		return actionTransient, nil
 	}
 
-	// Re-chunk and replace.
-	paragraphs := crawler.ExtractParagraphs(doc)
-	chunks := make([]platform.Chunk, 0, len(paragraphs))
-	for i, text := range paragraphs {
-		chunks = append(chunks, platform.Chunk{PageID: p.ID, Idx: i, Text: text})
+	if err := db.UpdatePageContent(p.ID, newText, newHash, newETag, newLastModified, now); err != nil {
+		return actionUpdated, fmt.Errorf("update content: %w", err)
 	}
 	if len(chunks) > 0 {
 		if err := db.ReplacePageChunks(p.ID, chunks); err != nil {
@@ -162,6 +156,38 @@ func revalidatePage(db *platform.DB, client *http.Client, p *platform.Page) (rev
 		}
 	}
 	return actionUpdated, nil
+}
+
+// extractRevalidatedContent dispatches body parsing by Content-Type,
+// returning the text content and chunks ready for storage.
+func extractRevalidatedContent(contentType string, body []byte) (string, []platform.Chunk, error) {
+	switch {
+	case strings.Contains(contentType, "application/pdf"):
+		text, rawChunks, _, err := handler.ExtractPDFContent(body)
+		if err != nil {
+			return "", nil, fmt.Errorf("parse PDF: %w", err)
+		}
+		return text, paragraphsToChunks(rawChunks), nil
+	case strings.Contains(contentType, "text/html"), strings.Contains(contentType, "application/xhtml+xml"):
+		doc, err := html.Parse(strings.NewReader(string(body)))
+		if err != nil {
+			return "", nil, fmt.Errorf("parse HTML: %w", err)
+		}
+		return crawler.ExtractText(doc), paragraphsToChunks(crawler.ExtractParagraphs(doc)), nil
+	case strings.HasPrefix(contentType, "text/plain"), strings.Contains(contentType, "markdown"):
+		text := string(body)
+		return text, paragraphsToChunks(handler.SplitTextContent(text)), nil
+	default:
+		return "", nil, fmt.Errorf("unsupported content type: %s", contentType)
+	}
+}
+
+func paragraphsToChunks(paragraphs []string) []platform.Chunk {
+	chunks := make([]platform.Chunk, 0, len(paragraphs))
+	for i, text := range paragraphs {
+		chunks = append(chunks, platform.Chunk{Idx: i, Text: text})
+	}
+	return chunks
 }
 
 // cmdPruneStale is the entry point for the `pageleft prune-stale` subcommand.

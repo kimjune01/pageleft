@@ -193,10 +193,10 @@ func TestContributePage_PDF_AcceptedWithDomainLicense(t *testing.T) {
 
 	// The fake site's host needs to be in the copyleft domain list.
 	// Since we can't modify the embedded list, we test against the live
-	// fetchAndVerify logic indirectly. Instead, test extractPDFContent directly.
-	text, chunks, title, err := extractPDFContent(pdfBytes)
+	// fetchAndVerify logic indirectly. Instead, test ExtractPDFContent directly.
+	text, chunks, title, err := ExtractPDFContent(pdfBytes)
 	if err != nil {
-		t.Fatalf("extractPDFContent: %v", err)
+		t.Fatalf("ExtractPDFContent: %v", err)
 	}
 	if title == "" {
 		t.Error("expected non-empty title from PDF")

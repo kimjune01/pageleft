@@ -363,7 +363,7 @@ func (h *Handler) handleWorkEmbed(w http.ResponseWriter, r *http.Request) {
 	// Chunk them from stored text_content and insert.
 	var allChunks []chunkWork
 	for _, p := range pages {
-		paragraphs := splitTextContent(p.TextContent)
+		paragraphs := SplitTextContent(p.TextContent)
 		if len(paragraphs) == 0 {
 			continue
 		}
@@ -399,9 +399,10 @@ func (h *Handler) handleWorkEmbed(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// splitTextContent splits plain text into paragraph-sized chunks.
-// Used when a page was stored without HTML parsing (no *html.Node available).
-func splitTextContent(text string) []string {
+// SplitTextContent splits plain text into paragraph-sized chunks.
+// Used when a page was stored without HTML parsing (no *html.Node available),
+// and by the prune-stale revalidator for text/plain and markdown bodies.
+func SplitTextContent(text string) []string {
 	var paragraphs []string
 	for _, p := range strings.Split(text, "\n") {
 		p = strings.TrimSpace(p)
@@ -711,7 +712,7 @@ func fetchAndVerify(pageURL string) (*fetchResult, error) {
 		if res.License == nil {
 			return nil, fmt.Errorf("PDF requires domain-level license verification")
 		}
-		text, chunks, title, err := extractPDFContent(bodyBytes)
+		text, chunks, title, err := ExtractPDFContent(bodyBytes)
 		if err != nil {
 			return nil, fmt.Errorf("parse PDF: %w", err)
 		}
@@ -792,8 +793,8 @@ func fetchForgeReadme(pageURL string, res crawler.Resolution) (*fetchResult, err
 	return &fetchResult{License: res.License, Doc: doc, FinalURL: pageURL, BodyHash: h}, nil
 }
 
-// extractPDFContent extracts text from PDF bytes, splits into chunks by page.
-func extractPDFContent(data []byte) (fullText string, chunks []string, title string, err error) {
+// ExtractPDFContent extracts text from PDF bytes, splits into chunks by page.
+func ExtractPDFContent(data []byte) (fullText string, chunks []string, title string, err error) {
 	tmpFile, err := os.CreateTemp("", "pageleft-*.pdf")
 	if err != nil {
 		return "", nil, "", fmt.Errorf("create temp file: %w", err)
