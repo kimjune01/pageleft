@@ -2,6 +2,20 @@ package crawler
 
 import "testing"
 
+func TestStaticListsLoaded(t *testing.T) {
+	// Sanity check: each list should have content after init. Catches embed
+	// directive omissions that would silently leave a list empty.
+	if len(binaryExtensions) == 0 {
+		t.Error("binaryExtensions is empty — embed directive missing?")
+	}
+	if len(mediaWikiMetaNamespaces) == 0 {
+		t.Error("mediaWikiMetaNamespaces is empty — embed directive missing?")
+	}
+	if len(wikimediaProjects) == 0 {
+		t.Error("wikimediaProjects is empty — embed directive missing?")
+	}
+}
+
 func TestIsNonEnglishWikimedia(t *testing.T) {
 	tests := []struct {
 		domain string

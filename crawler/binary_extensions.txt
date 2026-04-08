@@ -1,0 +1,62 @@
+# File extensions that are not indexable text.
+# URLs whose path ends with one of these are blocked at the resolve chain.
+# Lowercase, leading dot, one per line. Comments start with #.
+
+# Images
+.png
+.jpg
+.jpeg
+.gif
+.webp
+.svg
+.bmp
+.ico
+.tiff
+.tif
+.avif
+
+# Audio / video
+.mp3
+.mp4
+.wav
+.ogg
+.webm
+.flac
+.avi
+.mov
+.mkv
+
+# Archives
+.zip
+.tar
+.gz
+.bz2
+.xz
+.rar
+.7z
+
+# Executables and binaries
+.exe
+.dll
+.so
+.dylib
+.bin
+.dmg
+.iso
+.deb
+.rpm
+
+# Office documents (PDF is handled separately — text extraction works)
+.doc
+.docx
+.xls
+.xlsx
+.ppt
+.pptx
+
+# Fonts
+.woff
+.woff2
+.ttf
+.otf
+.eot

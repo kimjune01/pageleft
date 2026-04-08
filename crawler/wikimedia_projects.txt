@@ -1,0 +1,14 @@
+# Wikimedia project domains. Used to detect non-English Wikimedia content.
+# Wikimedia hosts follow the <lang>.<project>.org pattern, so a domain ending
+# with one of these and *not* prefixed with "en." is treated as out of scope.
+#
+# Format: leading dot + project domain, one per line. Comments start with #.
+
+.wikipedia.org
+.wikibooks.org
+.wikisource.org
+.wiktionary.org
+.wikiquote.org
+.wikinews.org
+.wikiversity.org
+.wikivoyage.org
