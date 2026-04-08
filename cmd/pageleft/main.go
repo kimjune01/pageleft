@@ -51,6 +51,8 @@ func main() {
 		cmdPruneFrontier(dbPath)
 	case "prune-pages":
 		cmdPrunePages(dbPath)
+	case "prune-stale":
+		cmdPruneStale(dbPath)
 	case "seed-blocklist":
 		cmdSeedBlocklist(dbPath)
 	default:

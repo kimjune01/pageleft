@@ -439,6 +439,112 @@ func (db *DB) UpdatePageRank(id int64, rank float64) error {
 	return err
 }
 
+// --- Layer 1: revalidation ---
+
+// PagesForRevalidation returns pages ordered by last_validated ASC NULLS FIRST,
+// so the oldest (and never-validated) pages come first. Pass limit=0 for unlimited.
+func (db *DB) PagesForRevalidation(limit int) ([]*Page, error) {
+	q := `SELECT id, url, title, text_content, license_url, license_type, embedding,
+		pagerank, quality, compilable, crawled_at, content_hash,
+		etag, last_modified, last_validated, consecutive_failures
+		FROM pages
+		ORDER BY last_validated IS NULL DESC, last_validated ASC`
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	rows, err := db.conn.Query(q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var pages []*Page
+	for rows.Next() {
+		p := &Page{}
+		var embJSON sql.NullString
+		var lastValidated sql.NullTime
+		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseURL, &p.LicenseType, &embJSON, &p.PageRank, &p.Quality, &p.Compilable, &p.CrawledAt, &p.ContentHash, &p.ETag, &p.LastModified, &lastValidated, &p.ConsecutiveFailures); err != nil {
+			return nil, err
+		}
+		if embJSON.Valid && embJSON.String != "" {
+			json.Unmarshal([]byte(embJSON.String), &p.Embedding)
+		}
+		if lastValidated.Valid {
+			p.LastValidated = lastValidated.Time
+		}
+		pages = append(pages, p)
+	}
+	return pages, nil
+}
+
+// UpdatePageValidators updates only the cache validator and revalidation
+// tracking columns. Used by the 304 Not Modified path and the unchanged-200
+// path where the body content didn't change.
+func (db *DB) UpdatePageValidators(id int64, etag, lastModified string, lastValidated time.Time, consecutiveFailures int) error {
+	_, err := db.conn.Exec(`
+		UPDATE pages SET etag = ?, last_modified = ?, last_validated = ?, consecutive_failures = ?
+		WHERE id = ?`,
+		etag, lastModified, lastValidated, consecutiveFailures, id)
+	return err
+}
+
+// UpdatePageContent updates text_content + content_hash + validators after a
+// changed-200 response. Resets consecutive_failures to 0. Does not touch chunks
+// (the caller is responsible for re-chunking if needed).
+func (db *DB) UpdatePageContent(id int64, textContent, contentHash, etag, lastModified string, lastValidated time.Time) error {
+	_, err := db.conn.Exec(`
+		UPDATE pages SET text_content = ?, content_hash = ?,
+			etag = ?, last_modified = ?, last_validated = ?, consecutive_failures = 0
+		WHERE id = ?`,
+		textContent, contentHash, etag, lastModified, lastValidated, id)
+	return err
+}
+
+// IncrementPageFailures bumps consecutive_failures for a page after a 404
+// or other persistent failure. Returns the new count so the caller can decide
+// whether to delete the page.
+func (db *DB) IncrementPageFailures(id int64) (int, error) {
+	if _, err := db.conn.Exec("UPDATE pages SET consecutive_failures = consecutive_failures + 1 WHERE id = ?", id); err != nil {
+		return 0, err
+	}
+	var count int
+	err := db.conn.QueryRow("SELECT consecutive_failures FROM pages WHERE id = ?", id).Scan(&count)
+	return count, err
+}
+
+// DeletePage removes a page and cascades to chunks, links, and quality_reviews.
+// Used by the prune-stale command for 410 Gone responses, persistent 404s,
+// and off-domain redirects.
+func (db *DB) DeletePage(id int64) error {
+	if _, err := db.conn.Exec("DELETE FROM chunks WHERE page_id = ?", id); err != nil {
+		return err
+	}
+	if _, err := db.conn.Exec("DELETE FROM links WHERE from_page_id = ? OR to_page_id = ?", id, id); err != nil {
+		return err
+	}
+	if _, err := db.conn.Exec("DELETE FROM quality_reviews WHERE page_id = ?", id); err != nil {
+		return err
+	}
+	if _, err := db.conn.Exec("DELETE FROM pages WHERE id = ?", id); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ReplacePageChunks deletes all existing chunks for a page and inserts new ones.
+// Used after content changes during revalidation. New chunks have NULL embeddings,
+// which the embed work queue will pick up automatically.
+func (db *DB) ReplacePageChunks(pageID int64, chunks []Chunk) error {
+	if _, err := db.conn.Exec("DELETE FROM chunks WHERE page_id = ?", pageID); err != nil {
+		return err
+	}
+	for i := range chunks {
+		chunks[i].PageID = pageID
+		chunks[i].Idx = i
+	}
+	return db.InsertChunks(pageID, chunks)
+}
+
 func (db *DB) UpdateEmbedding(id int64, emb []float64) error {
 	embJSON, err := json.Marshal(emb)
 	if err != nil {
