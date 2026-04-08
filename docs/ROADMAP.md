@@ -49,7 +49,7 @@ Crawl and embed run on federated workers — PageLeft serves the work queue and 
 | Cache | ✓ | Hash index (URL dedup), SHA-256 (content dedup) |
 | Filter | ✓ | Unified `Resolve()` chain + persistent Bloom filter |
 | Attend | ✓ | `log(1 + inbound) * (1 + noise)` frontier priority |
-| Consolidate | ✗ | EMA convergence gate for recrawl — not started |
+| Consolidate | partial | `prune-stale` revalidates by oldest `last_validated` (manual). EMA convergence gate not yet implemented. |
 | Remember | ✓ | SQLite WAL (pages, chunks, frontier tables) |
 
 **Done**:
@@ -63,16 +63,12 @@ Crawl and embed run on federated workers — PageLeft serves the work queue and 
 - Parallel crawl worker (`crawl_worker.py`): N threads pull from frontier, submit pages, drain embed queue.
 - Domain lists as embedded text files: `blocked_domains.txt` (indexing), `copyleft_domains.txt` (license bypass), `frontier_blocked_domains.txt` (frontier filter).
 - Content dedup via `content_hash` (SHA-256). `ON CONFLICT(url) DO NOTHING` on pages, `ON CONFLICT(url) DO UPDATE SET inbound = inbound + 1` on frontier.
+- **Stale-page revalidation (Layers 0+1)**: `pages` table carries `etag`, `last_modified`, `last_validated`, `consecutive_failures`. The `prune-stale` command iterates pages oldest-validated first and issues conditional GETs (`If-None-Match`, `If-Modified-Since`) against each. Decision tree: 304 → bump validators; 200 same hash → refresh validators; 200 new content → re-extract text and chunks atomically (single transaction); 410 → delete; 404 → increment failures, advance `last_validated`, delete after 3 occurrences; 5xx/timeout → transient skip; off-domain redirect → delete. Forge pages resolve to their raw fetch URL via `crawler.Resolve` so the off-domain check uses the right host. PDF/HTML/text-plain content types all dispatch correctly.
 
-**Next: Consolidate** (recrawl + freshness)
-- Push stale pages back onto the frontier, sorted by oldest `crawled_at`. Same fetch pipeline, different seed. One mechanism handles freshness, invalidation, and tombstoning:
-  - 200 + same `content_hash` → bump `crawled_at`, done
-  - 200 + new `content_hash` → re-chunk, null old embeddings, re-enter embed work queue
-  - 301/302 → update canonical URL, merge with existing entry at target
-  - 4xx (after 2-3 consecutive failures) → null embeddings (drops from search), keep page row
-  - 5xx → do nothing, server might be temporarily down
-  - Conditional GET (`ETag`, `Last-Modified`) to skip unchanged pages cheaply
-- Freshness as ranking signal: multiply rank by decay factor based on `crawled_at` staleness. Recently verified pages rank higher.
+**Next: Consolidate** (federated revalidation + freshness ranking)
+- **Layer 2: federate prune-stale through the work queue.** The local decision tree is done; what's missing is distribution and scheduling. New endpoints `GET /api/work/revalidate` (oldest first, NULLs first) and `POST /api/contribute/revalidate` mirror the embed/quality queue pattern. Workers do the conditional GETs and submit results.
+- **Redirect consolidation**: same-origin 301/302 should update the stored canonical URL and merge duplicates at the target. Currently treated as a successful fetch of the redirect target without URL update.
+- Freshness as ranking signal: multiply rank by decay factor based on `last_validated` staleness. Recently verified pages rank higher.
 - Algorithm: **exponential decay + EMA convergence gate** (parts bin: Consolidate × flat → EMA convergence gate).
   - Each page has a `freshness` score: `exp(-λ * days_since_crawl)`. λ chosen so freshness halves every 90 days.
   - Recrawl priority = `(1 - freshness) * pagerank`. High-authority stale pages recrawl first.
@@ -180,7 +176,7 @@ Uses the [embedding pipe](https://june.kim/embedding-pipe) pattern: Perceive (pa
 
 ## Eviction (store-level, not pipe-level)
 
-Pages that don't contribute to provenance or quality decay quietly. Redundant chunks (near-duplicates of higher-quality sources) lose quality over time. Dead pages (consecutive 4xx on recrawl) get their embeddings nulled — they stop appearing in search but stay in the index for dedup. See recrawl-via-frontier in the crawl pipe for the mechanism. Revoked licenses drop quality to zero. Below a threshold, the page is wiped. No graveyard, no archival — if the page mattered, it would have earned quality from reviews or links.
+Pages that don't contribute to provenance or quality decay quietly. Redundant chunks (near-duplicates of higher-quality sources) lose quality over time. Dead pages are removed by `prune-stale`: 410 deletes immediately, 404 deletes after 3 consecutive failures across runs (CDN hiccup tolerance), and off-domain redirects delete because the page no longer points at indexable content. Revoked licenses drop quality to zero. Below a threshold, the page is wiped. No graveyard, no archival — if the page mattered, it would have earned quality from reviews or links.
 
 **Embedding eviction for low-quality sources**: when a page's quality drops below a threshold, null its chunk embeddings so it stops appearing in search results. Keep the page row and content_hash in the index — the page is still known, still deduped, still prevents re-crawl. It just doesn't pollute the search space. If quality recovers (new reviews, updated content), re-embed from the work queue. This is compaction, not deletion: the index stays complete, the search stays clean.
 
