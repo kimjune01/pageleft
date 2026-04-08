@@ -49,6 +49,16 @@ func Resolve(rawURL string) Resolution {
 		return Resolution{Action: Block, Reason: "non-English Wikimedia out of scope"}
 	}
 
+	// 1d. MediaWiki meta-namespace pages — Category:, Special:, Help:, User:,
+	// Wikipedia:, Wiktionary:, Talk:, File:, Template:, Portal:.
+	// These are navigation/admin pages, not content. They appear on every
+	// MediaWiki site (Wikipedia, Wikibooks, etc.) and dilute the index.
+	// Must come before the copyleft allowlist so en.wikipedia.org/wiki/Category:
+	// pages get rejected instead of allowed.
+	if isMediaWikiMetaPage(rawURL) {
+		return Resolution{Action: Block, Reason: "MediaWiki meta-namespace page"}
+	}
+
 	// 2. Blocked domain (exact set — platform ToS)
 	if matchDomain(blockedDomains, domain) {
 		return Resolution{Action: Block, Reason: "domain blocked: platform ToS"}
@@ -121,6 +131,44 @@ func ShouldBlockFrontierFrom(sourceURL string) func(string) bool {
 // isWikipediaDomain returns true for any *.wikipedia.org subdomain.
 func isWikipediaDomain(domain string) bool {
 	return domain == "wikipedia.org" || strings.HasSuffix(domain, ".wikipedia.org")
+}
+
+// mediaWikiMetaNamespaces are URL path prefixes for non-content pages on
+// MediaWiki sites. /wiki/Category:Foo is a navigation list, not an article.
+var mediaWikiMetaNamespaces = []string{
+	"/wiki/Category:",
+	"/wiki/Special:",
+	"/wiki/Help:",
+	"/wiki/User:",
+	"/wiki/User_talk:",
+	"/wiki/Wikipedia:",
+	"/wiki/Wikipedia_talk:",
+	"/wiki/Wiktionary:",
+	"/wiki/Wikibooks:",
+	"/wiki/Wikisource:",
+	"/wiki/Talk:",
+	"/wiki/File:",
+	"/wiki/Template:",
+	"/wiki/Template_talk:",
+	"/wiki/Portal:",
+	"/wiki/MediaWiki:",
+	"/wiki/Module:",
+	"/wiki/Draft:",
+}
+
+// isMediaWikiMetaPage returns true if the URL points to a MediaWiki
+// meta-namespace page (Category:, Special:, etc.) on any wiki.
+func isMediaWikiMetaPage(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	for _, prefix := range mediaWikiMetaNamespaces {
+		if strings.HasPrefix(u.Path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // isNonEnglishWikimedia returns true for Wikipedia/Wikibooks/Wikisource/etc.
