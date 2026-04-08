@@ -761,8 +761,17 @@ func fetchForgeReadme(pageURL string, res crawler.Resolution) (*fetchResult, err
 	}
 
 	h := fmt.Sprintf("%x", sha256.Sum256(body))
-	etag := resp.Header.Get("ETag")
-	lastModified := resp.Header.Get("Last-Modified")
+
+	// Forge pages are stored under the canonical github.com/owner/repo URL,
+	// but the README is fetched from raw.githubusercontent.com — a different
+	// resource with its own ETag and Last-Modified. Storing the raw README's
+	// validators against the page URL would be semantically wrong because
+	// Layer 1's conditional GET would target the wrong endpoint.
+	//
+	// Until Layer 1 decides how to handle forge revalidation (e.g. by storing
+	// the fetch URL alongside the page URL, or by always doing unconditional
+	// fetches for forge content), we deliberately leave ETag and LastModified
+	// empty for forge pages.
 
 	// Wrap markdown lines in <p> tags for the paragraph extractor
 	htmlStr := "<html><body><article>"
@@ -780,10 +789,7 @@ func fetchForgeReadme(pageURL string, res crawler.Resolution) (*fetchResult, err
 		return nil, fmt.Errorf("parse README: %w", err)
 	}
 
-	return &fetchResult{
-		License: res.License, Doc: doc, FinalURL: pageURL, BodyHash: h,
-		ETag: etag, LastModified: lastModified,
-	}, nil
+	return &fetchResult{License: res.License, Doc: doc, FinalURL: pageURL, BodyHash: h}, nil
 }
 
 // extractPDFContent extracts text from PDF bytes, splits into chunks by page.
