@@ -437,7 +437,8 @@ func TestUpdatePageContent_RefreshesAllFields(t *testing.T) {
 	}
 
 	newTime := time.Date(2026, 4, 8, 0, 0, 0, 0, time.UTC)
-	if err := db.UpdatePageContent(id, "new content", "newhash", `"v2"`, "Mon, 08 Apr 2026 00:00:00 GMT", newTime); err != nil {
+	newChunks := []Chunk{{Idx: 0, Text: "new chunk"}}
+	if err := db.UpdatePageContent(id, "new content", "newhash", `"v2"`, "Mon, 08 Apr 2026 00:00:00 GMT", newTime, newChunks); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 
@@ -471,7 +472,7 @@ func TestIncrementPageFailures(t *testing.T) {
 	}
 
 	for want := 1; want <= 3; want++ {
-		got, err := db.IncrementPageFailures(id)
+		got, err := db.IncrementPageFailures(id, time.Now())
 		if err != nil {
 			t.Fatalf("increment: %v", err)
 		}
@@ -485,8 +486,17 @@ func TestDeletePage_CascadesChunksLinksReviews(t *testing.T) {
 	db := testDB(t)
 	defer db.Close()
 
-	id, err := db.InsertPage(&Page{
-		URL:         "https://example.com/test",
+	pageA, err := db.InsertPage(&Page{
+		URL:         "https://example.com/a",
+		LicenseURL:  "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType: "CC BY-SA",
+		CrawledAt:   time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageB, err := db.InsertPage(&Page{
+		URL:         "https://example.com/b",
 		LicenseURL:  "https://creativecommons.org/licenses/by-sa/4.0/",
 		LicenseType: "CC BY-SA",
 		CrawledAt:   time.Now(),
@@ -495,33 +505,42 @@ func TestDeletePage_CascadesChunksLinksReviews(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Add chunks and a quality review.
-	if err := db.InsertChunks(id, []Chunk{{PageID: id, Idx: 0, Text: "x"}}); err != nil {
+	// Add chunks, an outbound link from A→B, and a quality review on A.
+	if err := db.InsertChunks(pageA, []Chunk{{PageID: pageA, Idx: 0, Text: "x"}}); err != nil {
 		t.Fatalf("insert chunks: %v", err)
 	}
-	if err := db.SubmitQualityScore(id, 0.8, "test", "test-contributor"); err != nil {
+	if err := db.InsertLink(pageA, pageB, "ref"); err != nil {
+		t.Fatalf("insert link: %v", err)
+	}
+	if err := db.SubmitQualityScore(pageA, 0.8, "test", "test-contributor"); err != nil {
 		t.Fatalf("insert review: %v", err)
 	}
 
-	if err := db.DeletePage(id); err != nil {
+	if err := db.DeletePage(pageA); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 
 	// Page should be gone.
-	if _, err := db.GetPageByURL("https://example.com/test"); err != sql.ErrNoRows {
+	if _, err := db.GetPageByURL("https://example.com/a"); err != sql.ErrNoRows {
 		t.Errorf("page should be deleted, got err = %v", err)
 	}
-	// Chunks should be gone (cascade).
+	// Chunks gone (FK cascade).
 	var chunkCount int
-	db.conn.QueryRow("SELECT COUNT(*) FROM chunks WHERE page_id = ?", id).Scan(&chunkCount)
+	db.conn.QueryRow("SELECT COUNT(*) FROM chunks WHERE page_id = ?", pageA).Scan(&chunkCount)
 	if chunkCount != 0 {
 		t.Errorf("chunks remaining: %d, want 0", chunkCount)
 	}
-	// Reviews should be gone.
+	// Reviews gone (FK cascade).
 	var reviewCount int
-	db.conn.QueryRow("SELECT COUNT(*) FROM quality_reviews WHERE page_id = ?", id).Scan(&reviewCount)
+	db.conn.QueryRow("SELECT COUNT(*) FROM quality_reviews WHERE page_id = ?", pageA).Scan(&reviewCount)
 	if reviewCount != 0 {
 		t.Errorf("reviews remaining: %d, want 0", reviewCount)
+	}
+	// Links gone (explicit delete in DeletePage — no FK cascade on links table).
+	var linkCount int
+	db.conn.QueryRow("SELECT COUNT(*) FROM links WHERE from_page_id = ? OR to_page_id = ?", pageA, pageA).Scan(&linkCount)
+	if linkCount != 0 {
+		t.Errorf("links remaining: %d, want 0", linkCount)
 	}
 }
 

@@ -68,10 +68,13 @@ func revalidatePage(db *platform.DB, client *http.Client, p *platform.Page) (rev
 	now := time.Now()
 
 	// Off-domain redirect → treat as deletion (mirrors fetchAndVerify logic).
-	requestedHost := crawler.ExtractDomain(p.URL)
+	// Compare against fetchURL, not p.URL — for forge pages, fetchURL is the
+	// resolved raw URL (raw.githubusercontent.com) and the response will land
+	// there; comparing against p.URL (github.com) would always trip.
+	requestedHost := crawler.ExtractDomain(fetchURL)
 	finalHost := crawler.ExtractDomain(resp.Request.URL.String())
 	if requestedHost != "" && finalHost != "" && requestedHost != finalHost {
-		log.Printf("  off-domain redirect: %s → %s", p.URL, resp.Request.URL.String())
+		log.Printf("  off-domain redirect: %s → %s", fetchURL, resp.Request.URL.String())
 		if err := db.DeletePage(p.ID); err != nil {
 			return actionDeleted, fmt.Errorf("delete page: %w", err)
 		}
@@ -94,7 +97,7 @@ func revalidatePage(db *platform.DB, client *http.Client, p *platform.Page) (rev
 		return actionDeleted, nil
 
 	case resp.StatusCode == http.StatusNotFound: // 404
-		count, err := db.IncrementPageFailures(p.ID)
+		count, err := db.IncrementPageFailures(p.ID, now)
 		if err != nil {
 			return actionTransient, fmt.Errorf("increment failures: %w", err)
 		}
@@ -123,9 +126,17 @@ func revalidatePage(db *platform.DB, client *http.Client, p *platform.Page) (rev
 	}
 
 	// 200 OK — read body, check content_type for dispatch, compare hash.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024))
+	// Read 20 MiB + 1 byte to detect overflow: if we got the extra byte,
+	// the page exceeds our limit and we'd be hashing/storing truncated
+	// content. Skip such pages as transient rather than corrupt the index.
+	const bodyLimit = 20 * 1024 * 1024
+	body, err := io.ReadAll(io.LimitReader(resp.Body, bodyLimit+1))
 	if err != nil {
 		return actionTransient, fmt.Errorf("read body: %w", err)
+	}
+	if len(body) > bodyLimit {
+		log.Printf("  body exceeds %d bytes, skipping: %s", bodyLimit, p.URL)
+		return actionTransient, nil
 	}
 
 	newHash := fmt.Sprintf("%x", sha256.Sum256(body))
@@ -147,13 +158,9 @@ func revalidatePage(db *platform.DB, client *http.Client, p *platform.Page) (rev
 		return actionTransient, nil
 	}
 
-	if err := db.UpdatePageContent(p.ID, newText, newHash, newETag, newLastModified, now); err != nil {
+	// Atomic: page row + chunks update in a single transaction.
+	if err := db.UpdatePageContent(p.ID, newText, newHash, newETag, newLastModified, now, chunks); err != nil {
 		return actionUpdated, fmt.Errorf("update content: %w", err)
-	}
-	if len(chunks) > 0 {
-		if err := db.ReplacePageChunks(p.ID, chunks); err != nil {
-			return actionUpdated, fmt.Errorf("replace chunks: %w", err)
-		}
 	}
 	return actionUpdated, nil
 }

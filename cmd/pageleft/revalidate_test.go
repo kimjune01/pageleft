@@ -311,6 +311,163 @@ func TestRevalidatePage_SendsRobotsUserAgent(t *testing.T) {
 	}
 }
 
+func TestRevalidatePage_200ChangedReplacesChunks(t *testing.T) {
+	newBody := htmlPage("<p>This is the new content with enough text to be a real paragraph chunk.</p><p>And here is a second new paragraph that should also be chunked.</p>")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(newBody))
+	}))
+	defer srv.Close()
+
+	db := newRevalidateTestDB(t)
+	id, err := db.InsertPage(&platform.Page{
+		URL:           srv.URL + "/page",
+		ContentHash:   "oldhash",
+		LicenseURL:    "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType:   "CC BY-SA",
+		CrawledAt:     time.Now().Add(-24 * time.Hour),
+		LastValidated: time.Now().Add(-24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Seed two old chunks.
+	if err := db.InsertChunks(id, []platform.Chunk{
+		{PageID: id, Idx: 0, Text: "OLD CHUNK ONE"},
+		{PageID: id, Idx: 1, Text: "OLD CHUNK TWO"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p, _ := db.GetPageByURL(srv.URL + "/page")
+	action, err := revalidatePage(db, &http.Client{Timeout: 5 * time.Second}, p)
+	if err != nil {
+		t.Fatalf("revalidate: %v", err)
+	}
+	if action != actionUpdated {
+		t.Fatalf("action = %s, want updated", action)
+	}
+
+	// Old chunks should be gone, new ones in place.
+	rows, err := db.RawQuery("SELECT text FROM chunks WHERE page_id = ? ORDER BY idx", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var texts []string
+	for rows.Next() {
+		var s string
+		rows.Scan(&s)
+		texts = append(texts, s)
+	}
+	for _, s := range texts {
+		if strings.Contains(s, "OLD CHUNK") {
+			t.Errorf("old chunk survived replacement: %q", s)
+		}
+	}
+	if len(texts) == 0 {
+		t.Error("no new chunks inserted")
+	}
+}
+
+func TestRevalidatePage_304ResetsConsecutiveFailures(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer srv.Close()
+
+	db := newRevalidateTestDB(t)
+	if _, err := db.InsertPage(&platform.Page{
+		URL:                 srv.URL + "/page",
+		LicenseURL:          "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType:         "CC BY-SA",
+		CrawledAt:           time.Now(),
+		ConsecutiveFailures: 2, // recovered after 2 prior 404s
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p, _ := db.GetPageByURL(srv.URL + "/page")
+	if _, err := revalidatePage(db, &http.Client{Timeout: 5 * time.Second}, p); err != nil {
+		t.Fatalf("revalidate: %v", err)
+	}
+
+	got, _ := db.GetPageByURL(srv.URL + "/page")
+	if got.ConsecutiveFailures != 0 {
+		t.Errorf("ConsecutiveFailures after 304 = %d, want 0 (should reset)", got.ConsecutiveFailures)
+	}
+}
+
+func TestRevalidatePage_404AdvancesLastValidated(t *testing.T) {
+	// CDN hiccup tolerance: a 404 should bump last_validated so the page
+	// moves to the back of the queue and isn't immediately retried within
+	// the same prune-stale run that's iterating in oldest-first order.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	db := newRevalidateTestDB(t)
+	original := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := db.InsertPage(&platform.Page{
+		URL:           srv.URL + "/page",
+		LicenseURL:    "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType:   "CC BY-SA",
+		CrawledAt:     original,
+		LastValidated: original,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p, _ := db.GetPageByURL(srv.URL + "/page")
+	if _, err := revalidatePage(db, &http.Client{Timeout: 5 * time.Second}, p); err != nil {
+		t.Fatalf("revalidate: %v", err)
+	}
+
+	got, _ := db.GetPageByURL(srv.URL + "/page")
+	if !got.LastValidated.After(original) {
+		t.Errorf("LastValidated not advanced after 404: still %v", got.LastValidated)
+	}
+}
+
+func TestRevalidatePage_OversizedBodySkipped(t *testing.T) {
+	// Body larger than 20 MiB should be skipped, not truncated.
+	bigBody := strings.Repeat("a", 21*1024*1024)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(bigBody))
+	}))
+	defer srv.Close()
+
+	db := newRevalidateTestDB(t)
+	if _, err := db.InsertPage(&platform.Page{
+		URL:           srv.URL + "/page",
+		ContentHash:   "originalhash",
+		LicenseURL:    "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType:   "CC BY-SA",
+		CrawledAt:     time.Now(),
+		LastValidated: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p, _ := db.GetPageByURL(srv.URL + "/page")
+	action, err := revalidatePage(db, &http.Client{Timeout: 30 * time.Second}, p)
+	if err != nil {
+		t.Fatalf("revalidate: %v", err)
+	}
+	if action != actionTransient {
+		t.Errorf("oversized body: action = %s, want transient", action)
+	}
+
+	// Original content_hash must be preserved — we did NOT corrupt it with
+	// a truncated hash.
+	got, _ := db.GetPageByURL(srv.URL + "/page")
+	if got.ContentHash != "originalhash" {
+		t.Errorf("ContentHash overwritten with truncated hash: %s", got.ContentHash)
+	}
+}
+
 func TestRevalidatePage_500Transient(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
