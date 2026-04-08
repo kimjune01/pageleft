@@ -42,6 +42,13 @@ func Resolve(rawURL string) Resolution {
 		return Resolution{Action: Skip, Reason: "no domain"}
 	}
 
+	// 1c. Non-English Wikipedia/Wikimedia — out of scope for an English index.
+	// These pass license verification legitimately (CC BY-SA in their HTML)
+	// but contribute noise without serving the audience.
+	if isNonEnglishWikimedia(domain) {
+		return Resolution{Action: Block, Reason: "non-English Wikimedia out of scope"}
+	}
+
 	// 2. Blocked domain (exact set — platform ToS)
 	if matchDomain(blockedDomains, domain) {
 		return Resolution{Action: Block, Reason: "domain blocked: platform ToS"}
@@ -94,19 +101,48 @@ func ShouldBlockFrontier(rawURL string) bool {
 
 // ShouldBlockFrontierFrom returns a URLFilter that also blocks same-site
 // links for massive corpora (currently Wikipedia). Cross-domain links into
-// Wikipedia still pass; only Wikipedia→Wikipedia internal links are blocked.
+// Wikipedia still pass; only Wikipedia→Wikipedia links are blocked.
 func ShouldBlockFrontierFrom(sourceURL string) func(string) bool {
-	sourceDomain := ExtractDomain(sourceURL)
+	sourceIsWiki := isWikipediaDomain(ExtractDomain(sourceURL))
 	return func(targetURL string) bool {
 		if ShouldBlockFrontier(targetURL) {
 			return true
 		}
-		// Block Wikipedia internal links — corpus is too large to spider.
-		if sourceDomain == "en.wikipedia.org" && ExtractDomain(targetURL) == "en.wikipedia.org" {
+		// Block any Wikipedia → Wikipedia link, regardless of language.
+		// English articles dump 50-200 language-sidebar links per page, and
+		// non-English Wikipedia articles spider themselves the same way.
+		if sourceIsWiki && isWikipediaDomain(ExtractDomain(targetURL)) {
 			return true
 		}
 		return false
 	}
+}
+
+// isWikipediaDomain returns true for any *.wikipedia.org subdomain.
+func isWikipediaDomain(domain string) bool {
+	return domain == "wikipedia.org" || strings.HasSuffix(domain, ".wikipedia.org")
+}
+
+// isNonEnglishWikimedia returns true for Wikipedia/Wikibooks/Wikisource/etc.
+// in any language other than English. The English subdomains are explicitly
+// allowed via the copyleft allowlist; everything else is out of scope.
+func isNonEnglishWikimedia(domain string) bool {
+	// Wikimedia hosts are <lang>.<project>.org
+	wikimediaProjects := []string{
+		".wikipedia.org", ".wikibooks.org", ".wikisource.org",
+		".wiktionary.org", ".wikiquote.org", ".wikinews.org",
+		".wikiversity.org", ".wikivoyage.org",
+	}
+	for _, project := range wikimediaProjects {
+		if strings.HasSuffix(domain, project) {
+			// Allow only en.<project>.org
+			if domain == "en"+project {
+				return false
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // ResolveForFrontier is a lighter check for AddToFrontier.
@@ -123,6 +159,9 @@ func ResolveForFrontier(rawURL string) bool {
 		return false
 	}
 	if matchDomain(blockedDomains, domain) {
+		return false
+	}
+	if isNonEnglishWikimedia(domain) {
 		return false
 	}
 	if IsNonPermissive(domain) {

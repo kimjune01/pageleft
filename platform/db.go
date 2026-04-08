@@ -589,6 +589,39 @@ func (db *DB) DeleteFrontierURL(rawURL string) {
 	db.conn.Exec("DELETE FROM frontier WHERE url = ?", rawURL)
 }
 
+// PrunePages deletes pages whose URLs match the provided filter, along with
+// their chunks, links, and quality reviews. Returns the number of pages removed.
+// Used to retroactively purge content that should never have been indexed.
+func (db *DB) PrunePages(shouldDelete URLFilter) (int64, error) {
+	if shouldDelete == nil {
+		return 0, nil
+	}
+
+	rows, err := db.conn.Query("SELECT id, url FROM pages")
+	if err != nil {
+		return 0, err
+	}
+	var toDelete []int64
+	for rows.Next() {
+		var id int64
+		var u string
+		rows.Scan(&id, &u)
+		if shouldDelete(u) {
+			toDelete = append(toDelete, id)
+		}
+	}
+	rows.Close()
+
+	for _, id := range toDelete {
+		db.conn.Exec("DELETE FROM chunks WHERE page_id = ?", id)
+		db.conn.Exec("DELETE FROM links WHERE from_page_id = ? OR to_page_id = ?", id, id)
+		db.conn.Exec("DELETE FROM quality_reviews WHERE page_id = ?", id)
+		db.conn.Exec("DELETE FROM pages WHERE id = ?", id)
+	}
+
+	return int64(len(toDelete)), nil
+}
+
 // scoredFrontier fetches frontier entries, overfetches 3x, scores with
 // log(1 + inbound) * (1 + noise), sorts, and returns top `limit`.
 // The noise term shuffles entries within the same inbound tier,
