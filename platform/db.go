@@ -22,10 +22,10 @@ import (
 )
 
 type DB struct {
-	conn          *sql.DB
-	urlBloom      *urlBloomFilter
-	bloomPath     string
-	chunkBloom    *urlBloomFilter
+	conn           *sql.DB
+	urlBloom       *urlBloomFilter
+	bloomPath      string
+	chunkBloom     *urlBloomFilter
 	chunkBloomPath string
 }
 
@@ -153,7 +153,6 @@ type FrontierEntry struct {
 	DiscoveredAt time.Time
 }
 
-
 func NewDB(path string) (*DB, error) {
 	conn, err := sql.Open("sqlite", path+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)")
 	if err != nil {
@@ -268,7 +267,11 @@ func (db *DB) migrate() error {
 			embedding JSON,
 			pagerank REAL NOT NULL DEFAULT 0,
 			crawled_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			content_hash TEXT NOT NULL DEFAULT ''
+			content_hash TEXT NOT NULL DEFAULT '',
+			etag TEXT NOT NULL DEFAULT '',
+			last_modified TEXT NOT NULL DEFAULT '',
+			last_validated DATETIME,
+			consecutive_failures INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE TABLE IF NOT EXISTS links (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -315,19 +318,35 @@ func (db *DB) migrate() error {
 	if err != nil {
 		return err
 	}
-	// Add columns (idempotent — ignore error if already exists)
-	db.conn.Exec("ALTER TABLE pages ADD COLUMN quality REAL NOT NULL DEFAULT 1.0")
-	db.conn.Exec("ALTER TABLE pages ADD COLUMN compilable INTEGER NOT NULL DEFAULT 0")
-	db.conn.Exec("ALTER TABLE quality_reviews ADD COLUMN contributor TEXT NOT NULL DEFAULT ''")
-	db.conn.Exec("ALTER TABLE frontier ADD COLUMN inbound INTEGER NOT NULL DEFAULT 1")
+	// addColumn runs an ALTER TABLE ADD COLUMN, ignoring only the
+	// "duplicate column" error so the migration is idempotent across
+	// fresh and existing databases. All other errors surface.
+	addColumn := func(stmt string) error {
+		if _, err := db.conn.Exec(stmt); err != nil &&
+			!strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("%s: %w", stmt, err)
+		}
+		return nil
+	}
+
+	for _, stmt := range []string{
+		"ALTER TABLE pages ADD COLUMN quality REAL NOT NULL DEFAULT 1.0",
+		"ALTER TABLE pages ADD COLUMN compilable INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE quality_reviews ADD COLUMN contributor TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE frontier ADD COLUMN inbound INTEGER NOT NULL DEFAULT 1",
+		// Layer 0: HTTP cache validators and revalidation tracking.
+		// etag/last_modified power conditional GETs (If-None-Match, If-Modified-Since).
+		// last_validated/consecutive_failures power the future prune-stale command.
+		"ALTER TABLE pages ADD COLUMN etag TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE pages ADD COLUMN last_modified TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE pages ADD COLUMN last_validated DATETIME",
+		"ALTER TABLE pages ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0",
+	} {
+		if err := addColumn(stmt); err != nil {
+			return err
+		}
+	}
 	db.conn.Exec("CREATE INDEX IF NOT EXISTS idx_frontier_inbound ON frontier(inbound DESC)")
-	// Layer 0: HTTP cache validators and revalidation tracking.
-	// etag/last_modified power conditional GETs (If-None-Match, If-Modified-Since).
-	// last_validated/consecutive_failures power the future prune-stale command.
-	db.conn.Exec("ALTER TABLE pages ADD COLUMN etag TEXT NOT NULL DEFAULT ''")
-	db.conn.Exec("ALTER TABLE pages ADD COLUMN last_modified TEXT NOT NULL DEFAULT ''")
-	db.conn.Exec("ALTER TABLE pages ADD COLUMN last_validated DATETIME")
-	db.conn.Exec("ALTER TABLE pages ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0")
 	return nil
 }
 
@@ -545,17 +564,17 @@ var trackingParams = map[string]bool{
 	"utm_term":     true,
 	"utm_id":       true,
 	// Click-tracking IDs
-	"fbclid":   true,
-	"gclid":    true,
-	"dclid":    true,
-	"msclkid":  true,
-	"yclid":    true,
-	"_ga":      true,
+	"fbclid":  true,
+	"gclid":   true,
+	"dclid":   true,
+	"msclkid": true,
+	"yclid":   true,
+	"_ga":     true,
 	// Newsletter / mail
-	"mc_eid":  true,
-	"mc_cid":  true,
-	"_hsenc":  true,
-	"_hsmi":   true,
+	"mc_eid": true,
+	"mc_cid": true,
+	"_hsenc": true,
+	"_hsmi":  true,
 	// Misc referrer
 	"ref_src": true,
 }
@@ -752,7 +771,6 @@ func (db *DB) scoredFrontier(limit int) ([]*FrontierEntry, error) {
 	}
 	return pool, nil
 }
-
 
 // URLFilter returns true if a URL should be excluded from the frontier.
 type URLFilter func(string) bool

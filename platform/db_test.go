@@ -134,15 +134,15 @@ func TestInsertPage_StoresETagAndLastModified(t *testing.T) {
 
 	now := time.Now().Truncate(time.Second)
 	p := &Page{
-		URL:           "https://example.com/test",
-		Title:         "Test",
-		TextContent:   "hello",
-		LicenseURL:    "https://creativecommons.org/licenses/by-sa/4.0/",
-		LicenseType:   "CC BY-SA",
-		ContentHash:   "abc123",
-		CrawledAt:     now,
-		ETag:          `"v1-deadbeef"`,
-		LastModified:  "Wed, 21 Oct 2026 07:28:00 GMT",
+		URL:          "https://example.com/test",
+		Title:        "Test",
+		TextContent:  "hello",
+		LicenseURL:   "https://creativecommons.org/licenses/by-sa/4.0/",
+		LicenseType:  "CC BY-SA",
+		ContentHash:  "abc123",
+		CrawledAt:    now,
+		ETag:         `"v1-deadbeef"`,
+		LastModified: "Wed, 21 Oct 2026 07:28:00 GMT",
 	}
 	if _, err := db.InsertPage(p); err != nil {
 		t.Fatalf("insert: %v", err)
