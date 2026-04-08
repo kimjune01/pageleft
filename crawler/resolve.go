@@ -134,27 +134,9 @@ func isWikipediaDomain(domain string) bool {
 }
 
 // mediaWikiMetaNamespaces are URL path prefixes for non-content pages on
-// MediaWiki sites. /wiki/Category:Foo is a navigation list, not an article.
-var mediaWikiMetaNamespaces = []string{
-	"/wiki/Category:",
-	"/wiki/Special:",
-	"/wiki/Help:",
-	"/wiki/User:",
-	"/wiki/User_talk:",
-	"/wiki/Wikipedia:",
-	"/wiki/Wikipedia_talk:",
-	"/wiki/Wiktionary:",
-	"/wiki/Wikibooks:",
-	"/wiki/Wikisource:",
-	"/wiki/Talk:",
-	"/wiki/File:",
-	"/wiki/Template:",
-	"/wiki/Template_talk:",
-	"/wiki/Portal:",
-	"/wiki/MediaWiki:",
-	"/wiki/Module:",
-	"/wiki/Draft:",
-}
+// MediaWiki sites (Category:, Special:, etc.). Loaded from
+// crawler/mediawiki_meta_namespaces.txt at init time.
+var mediaWikiMetaNamespaces []string
 
 // isMediaWikiMetaPage returns true if the URL points to a MediaWiki
 // meta-namespace page (Category:, Special:, etc.) on any wiki.
@@ -171,19 +153,16 @@ func isMediaWikiMetaPage(rawURL string) bool {
 	return false
 }
 
+// wikimediaProjects are leading-dot project domains (e.g. ".wikipedia.org").
+// Loaded from crawler/wikimedia_projects.txt at init time.
+var wikimediaProjects []string
+
 // isNonEnglishWikimedia returns true for Wikipedia/Wikibooks/Wikisource/etc.
-// in any language other than English. The English subdomains are explicitly
-// allowed via the copyleft allowlist; everything else is out of scope.
+// in any language other than English. Wikimedia hosts follow <lang>.<project>.org;
+// only the en. subdomain is allowed.
 func isNonEnglishWikimedia(domain string) bool {
-	// Wikimedia hosts are <lang>.<project>.org
-	wikimediaProjects := []string{
-		".wikipedia.org", ".wikibooks.org", ".wikisource.org",
-		".wiktionary.org", ".wikiquote.org", ".wikinews.org",
-		".wikiversity.org", ".wikivoyage.org",
-	}
 	for _, project := range wikimediaProjects {
 		if strings.HasSuffix(domain, project) {
-			// Allow only en.<project>.org
 			if domain == "en"+project {
 				return false
 			}
@@ -236,20 +215,9 @@ func isBinaryURL(rawURL string) bool {
 	return false
 }
 
-var binaryExtensions = []string{
-	// Images
-	".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico", ".tiff", ".tif", ".avif",
-	// Audio/video
-	".mp3", ".mp4", ".wav", ".ogg", ".webm", ".flac", ".avi", ".mov", ".mkv",
-	// Archives
-	".zip", ".tar", ".gz", ".bz2", ".xz", ".rar", ".7z",
-	// Binaries
-	".exe", ".dll", ".so", ".dylib", ".bin", ".dmg", ".iso", ".deb", ".rpm",
-	// Documents (non-text, but not PDF — PDF text extraction is supported)
-	".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-	// Fonts
-	".woff", ".woff2", ".ttf", ".otf", ".eot",
-}
+// binaryExtensions are non-text file extensions used by isBinaryURL.
+// Loaded from crawler/binary_extensions.txt at init time.
+var binaryExtensions []string
 
 // CanonicalPageURL normalizes a URL for storage. Collapses forge deep paths
 // to owner/repo so the same repo isn't stored multiple times.
