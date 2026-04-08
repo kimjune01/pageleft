@@ -667,6 +667,16 @@ func fetchAndVerify(pageURL string) (*fetchResult, error) {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
 
+	// Off-domain redirect check: if the response landed on a different host
+	// than the requested URL, the cached res.License (from the original
+	// allowlisted domain) doesn't apply. This catches share-link tracking
+	// params like ?share=linkedin that redirect to login pages.
+	requestedDomain := crawler.ExtractDomain(fetchURL)
+	finalDomain := crawler.ExtractDomain(resp.Request.URL.String())
+	if requestedDomain != "" && finalDomain != "" && requestedDomain != finalDomain {
+		return nil, fmt.Errorf("redirect off-domain: %s → %s", requestedDomain, finalDomain)
+	}
+
 	contentType := resp.Header.Get("Content-Type")
 	isPDF := strings.Contains(contentType, "application/pdf")
 	isHTML := strings.Contains(contentType, "text/html")

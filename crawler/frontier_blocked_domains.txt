@@ -57,3 +57,12 @@ tinyurl.com
 # Misc noise discovered in frontier
 ncbi.nlm.nih.gov
 predictionbook.com
+
+# Wiktionary — dictionary entries are too thin/numerous to add search signal,
+# and they dominate the index because every Wikipedia article links to them
+# via "Terms with X translations" categories. Reference, not expression.
+wiktionary.org
+
+# Wikimedia Foundation governance wiki — meta/policy content with path-based
+# language variants (/nb, /de, /es) that bypass the subdomain language check.
+foundation.wikimedia.org

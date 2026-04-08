@@ -46,6 +46,55 @@ func TestResolveBlocksNonEnglishWikimedia(t *testing.T) {
 	}
 }
 
+func TestIsMediaWikiMetaPage(t *testing.T) {
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		// Meta-namespace pages: blocked
+		{"https://en.wikipedia.org/wiki/Category:Animals", true},
+		{"https://en.wikipedia.org/wiki/Special:Random", true},
+		{"https://en.wikipedia.org/wiki/Help:Contents", true},
+		{"https://en.wikipedia.org/wiki/User:Jimbo_Wales", true},
+		{"https://en.wikipedia.org/wiki/Wikipedia:Multilingual_coordination", true},
+		{"https://en.wiktionary.org/wiki/Category:Terms_with_Greek_translations", true},
+		{"https://en.wiktionary.org/wiki/Wiktionary:Contact_us", true},
+		{"https://en.wikibooks.org/wiki/Talk:Main_Page", true},
+		{"https://en.wikipedia.org/wiki/File:Logo.png", true},
+		{"https://en.wikipedia.org/wiki/Template:Cite", true},
+
+		// Real article pages: allowed
+		{"https://en.wikipedia.org/wiki/Category_theory", false}, // not Category: prefix
+		{"https://en.wikipedia.org/wiki/Cat", false},
+		{"https://en.wikipedia.org/wiki/URL", false},
+		{"https://en.wikibooks.org/wiki/R_Programming", false},
+		{"https://en.wikipedia.org/wiki/Special_relativity", false}, // underscore, not colon
+		{"https://bartoszmilewski.com/2015/04/15/limits-and-colimits", false},
+	}
+
+	for _, tt := range tests {
+		got := isMediaWikiMetaPage(tt.url)
+		if got != tt.want {
+			t.Errorf("isMediaWikiMetaPage(%q) = %v, want %v", tt.url, got, tt.want)
+		}
+	}
+}
+
+func TestResolveBlocksWiktionary(t *testing.T) {
+	// en.wiktionary.org should be blocked via frontier_blocked_domains.txt
+	res := Resolve("https://en.wiktionary.org/wiki/ache")
+	if res.Action != Block {
+		t.Errorf("Resolve(en.wiktionary.org/wiki/ache) = %v, want Block", res.Action)
+	}
+}
+
+func TestResolveBlocksFoundationWikimedia(t *testing.T) {
+	res := Resolve("https://foundation.wikimedia.org/wiki/Policy:Terms_of_Use")
+	if res.Action != Block {
+		t.Errorf("Resolve(foundation.wikimedia.org) = %v, want Block", res.Action)
+	}
+}
+
 func TestShouldBlockFrontierFromBlocksAllWikiCrosslinks(t *testing.T) {
 	// English Wikipedia article shouldn't dump its language sidebar into the frontier.
 	filter := ShouldBlockFrontierFrom("https://en.wikipedia.org/wiki/Cat")

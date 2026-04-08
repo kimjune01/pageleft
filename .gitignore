@@ -7,5 +7,4 @@ sidecar/.venv/
 .env
 /pageleft
 infra/infra
-nonpermissive.bloom
-url-seen.bloom
+*.bloom
