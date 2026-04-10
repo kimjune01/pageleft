@@ -313,6 +313,7 @@ func (db *DB) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_pages_url ON pages(url);
 		CREATE INDEX IF NOT EXISTS idx_frontier_depth ON frontier(depth);
 		CREATE INDEX IF NOT EXISTS idx_chunks_page_id ON chunks(page_id);
+		CREATE INDEX IF NOT EXISTS idx_chunks_no_embedding ON chunks(id) WHERE embedding IS NULL OR embedding = '[]' OR embedding = 'null';
 		CREATE INDEX IF NOT EXISTS idx_quality_reviews_page_id ON quality_reviews(page_id);
 	`)
 	if err != nil {

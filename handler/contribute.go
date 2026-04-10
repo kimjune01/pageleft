@@ -443,14 +443,36 @@ func (h *Handler) handleContributeEmbeddings(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// Reject the entire batch if any item has a null or wrong-dimension embedding.
+	// Don't silently skip — make the caller fix their pipeline.
+	for i, item := range items {
+		if item.ChunkID == 0 {
+			msg := fmt.Sprintf(
+				`{"error":"item %d has chunk_id 0. You had ONE job: fetch work, embed it, submit it. chunk_id is not optional."}`, i)
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		if len(item.Embedding) == 0 {
+			msg := fmt.Sprintf(
+				`{"error":"item %d (chunk %d) has a null/empty embedding. Do NOT submit chunks you failed to embed. That defeats the entire purpose of this endpoint."}`,
+				i, item.ChunkID)
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		if len(item.Embedding) != platform.EmbeddingDim {
+			msg := fmt.Sprintf(
+				`{"error":"item %d (chunk %d) has %d dimensions, expected %d. You are submitting embeddings from the wrong model. Use %s."}`,
+				i, item.ChunkID, len(item.Embedding), platform.EmbeddingDim, platform.EmbeddingModel)
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+	}
+
 	contributor := platform.ContributorHash(r.RemoteAddr)
 	accepted := 0
 	completedPages := []int64{}
 
 	for _, item := range items {
-		if item.ChunkID == 0 || len(item.Embedding) != platform.EmbeddingDim {
-			continue
-		}
 		if err := h.db.UpdateChunkEmbedding(item.ChunkID, item.Embedding); err != nil {
 			continue
 		}
