@@ -113,7 +113,25 @@ func (h *Handler) Mux() http.Handler {
 	mux.HandleFunc("POST /api/contribute/compilable", h.handleContributeCompilable)
 	mux.HandleFunc("POST /api/embed", h.handleEmbed)
 	mux.HandleFunc("GET /contribute", h.handleContribute)
+	mux.HandleFunc("/api/", h.handleAPINotFound)
 	return mux
+}
+
+// handleAPINotFound is the catch-all for /api/* paths that don't match any
+// registered route. It returns a 404 with a hint pointing to the documented
+// entry points so agents guessing route names get redirected instead of
+// probing blindly.
+func (h *Handler) handleAPINotFound(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusNotFound)
+	fmt.Fprintf(w, `404 not found: %s %s
+
+PageLeft routes:
+  GET /            Overview and read API (search, stats, leaderboard)
+  GET /contribute  Contribution endpoints (compute, quality, content)
+
+Source: https://github.com/kimjune01/pageleft
+`, r.Method, r.URL.Path)
 }
 
 //go:embed skill.md
