@@ -193,10 +193,10 @@ func TestContributePage_PDF_AcceptedWithDomainLicense(t *testing.T) {
 
 	// The fake site's host needs to be in the copyleft domain list.
 	// Since we can't modify the embedded list, we test against the live
-	// fetchAndVerify logic indirectly. Instead, test extractPDFContent directly.
-	text, chunks, title, err := extractPDFContent(pdfBytes)
+	// fetchAndVerify logic indirectly. Instead, test ExtractPDFContent directly.
+	text, chunks, title, err := ExtractPDFContent(pdfBytes)
 	if err != nil {
-		t.Fatalf("extractPDFContent: %v", err)
+		t.Fatalf("ExtractPDFContent: %v", err)
 	}
 	if title == "" {
 		t.Error("expected non-empty title from PDF")
@@ -237,6 +237,100 @@ func TestContributePage_PDF_RejectedWithoutDomainLicense(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "PDF requires domain-level license") {
 		t.Errorf("unexpected error: %s", rec.Body.String())
+	}
+}
+
+func TestFrontierReject_DeletesAndLearns(t *testing.T) {
+	h, cleanup := newTestHandler(t)
+	defer cleanup()
+
+	// Seed frontier: 5 from dead.example.com, 2 from flaky.example.com, 1 binary skip.
+	h.db.AddToFrontier("https://dead.example.com/a", 0)
+	h.db.AddToFrontier("https://dead.example.com/b", 0)
+	h.db.AddToFrontier("https://dead.example.com/c", 0)
+	h.db.AddToFrontier("https://dead.example.com/d", 0)
+	h.db.AddToFrontier("https://dead.example.com/e", 0)
+	h.db.AddToFrontier("https://flaky.example.com/x", 0)
+	h.db.AddToFrontier("https://flaky.example.com/y", 0)
+	h.db.AddToFrontier("https://imgs.example.com/pic.png", 0)
+
+	// dead.example.com has 5 HTTP failures → should be learned.
+	// flaky.example.com has only 2 → should NOT be learned.
+	// imgs.example.com has "binary extension" reason → should NOT count toward learning.
+	body := `[
+		{"url":"https://dead.example.com/a","reason":"status 404"},
+		{"url":"https://dead.example.com/b","reason":"status 404"},
+		{"url":"https://dead.example.com/c","reason":"status 403"},
+		{"url":"https://dead.example.com/d","reason":"fetch failed: timeout"},
+		{"url":"https://dead.example.com/e","reason":"status 500"},
+		{"url":"https://flaky.example.com/x","reason":"timeout"},
+		{"url":"https://flaky.example.com/y","reason":"status 403"},
+		{"url":"https://imgs.example.com/pic.png","reason":"binary extension"}
+	]`
+	req := httptest.NewRequest("POST", "/api/frontier/reject", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Mux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if deleted := int(resp["deleted"].(float64)); deleted != 8 {
+		t.Errorf("deleted = %d, want 8", deleted)
+	}
+	if learned := int(resp["domains_learned"].(float64)); learned != 1 {
+		t.Errorf("domains_learned = %d, want 1 (only dead.example.com)", learned)
+	}
+
+	// Frontier should be empty.
+	entries, _ := h.db.PopFrontier(10)
+	if len(entries) != 0 {
+		t.Errorf("frontier has %d entries, want 0", len(entries))
+	}
+}
+
+func TestContributePage_CapturesETagAndLastModified(t *testing.T) {
+	// Server emits both validators in the response.
+	fakeSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set("ETag", `"abc-123"`)
+		w.Header().Set("Last-Modified", "Mon, 01 Jan 2026 00:00:00 GMT")
+		w.Write([]byte(copyleftPage()))
+	}))
+	defer fakeSite.Close()
+
+	h, cleanup := newTestHandler(t)
+	defer cleanup()
+
+	body := `{"url":"` + fakeSite.URL + `/test"}`
+	req := httptest.NewRequest("POST", "/api/contribute/page", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Mux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	page, err := h.db.GetPageByURL(fakeSite.URL + "/test")
+	if err != nil {
+		t.Fatalf("get page: %v", err)
+	}
+	if page.ETag != `"abc-123"` {
+		t.Errorf("ETag = %q, want %q", page.ETag, `"abc-123"`)
+	}
+	if page.LastModified != "Mon, 01 Jan 2026 00:00:00 GMT" {
+		t.Errorf("LastModified = %q, want header value", page.LastModified)
+	}
+	if page.LastValidated.IsZero() {
+		t.Error("LastValidated should be set on fresh insert, got zero")
 	}
 }
 

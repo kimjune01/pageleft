@@ -22,10 +22,10 @@ import (
 )
 
 type DB struct {
-	conn          *sql.DB
-	urlBloom      *urlBloomFilter
-	bloomPath     string
-	chunkBloom    *urlBloomFilter
+	conn           *sql.DB
+	urlBloom       *urlBloomFilter
+	bloomPath      string
+	chunkBloom     *urlBloomFilter
 	chunkBloomPath string
 }
 
@@ -102,18 +102,22 @@ func (bf *urlBloomFilter) save(path string) error {
 }
 
 type Page struct {
-	ID          int64
-	URL         string
-	Title       string
-	TextContent string
-	LicenseURL  string
-	LicenseType string
-	Embedding   []float64
-	PageRank    float64
-	Quality     float64
-	Compilable  bool
-	CrawledAt   time.Time
-	ContentHash string
+	ID                  int64
+	URL                 string
+	Title               string
+	TextContent         string
+	LicenseURL          string
+	LicenseType         string
+	Embedding           []float64
+	PageRank            float64
+	Quality             float64
+	Compilable          bool
+	CrawledAt           time.Time
+	ContentHash         string
+	ETag                string
+	LastModified        string
+	LastValidated       time.Time
+	ConsecutiveFailures int
 }
 
 type Link struct {
@@ -148,7 +152,6 @@ type FrontierEntry struct {
 	Priority     float64
 	DiscoveredAt time.Time
 }
-
 
 func NewDB(path string) (*DB, error) {
 	conn, err := sql.Open("sqlite", path+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)")
@@ -264,7 +267,11 @@ func (db *DB) migrate() error {
 			embedding JSON,
 			pagerank REAL NOT NULL DEFAULT 0,
 			crawled_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			content_hash TEXT NOT NULL DEFAULT ''
+			content_hash TEXT NOT NULL DEFAULT '',
+			etag TEXT NOT NULL DEFAULT '',
+			last_modified TEXT NOT NULL DEFAULT '',
+			last_validated DATETIME,
+			consecutive_failures INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE TABLE IF NOT EXISTS links (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -311,11 +318,34 @@ func (db *DB) migrate() error {
 	if err != nil {
 		return err
 	}
-	// Add columns (idempotent — ignore error if already exists)
-	db.conn.Exec("ALTER TABLE pages ADD COLUMN quality REAL NOT NULL DEFAULT 1.0")
-	db.conn.Exec("ALTER TABLE pages ADD COLUMN compilable INTEGER NOT NULL DEFAULT 0")
-	db.conn.Exec("ALTER TABLE quality_reviews ADD COLUMN contributor TEXT NOT NULL DEFAULT ''")
-	db.conn.Exec("ALTER TABLE frontier ADD COLUMN inbound INTEGER NOT NULL DEFAULT 1")
+	// addColumn runs an ALTER TABLE ADD COLUMN, ignoring only the
+	// "duplicate column" error so the migration is idempotent across
+	// fresh and existing databases. All other errors surface.
+	addColumn := func(stmt string) error {
+		if _, err := db.conn.Exec(stmt); err != nil &&
+			!strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("%s: %w", stmt, err)
+		}
+		return nil
+	}
+
+	for _, stmt := range []string{
+		"ALTER TABLE pages ADD COLUMN quality REAL NOT NULL DEFAULT 1.0",
+		"ALTER TABLE pages ADD COLUMN compilable INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE quality_reviews ADD COLUMN contributor TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE frontier ADD COLUMN inbound INTEGER NOT NULL DEFAULT 1",
+		// Layer 0: HTTP cache validators and revalidation tracking.
+		// etag/last_modified power conditional GETs (If-None-Match, If-Modified-Since).
+		// last_validated/consecutive_failures power the future prune-stale command.
+		"ALTER TABLE pages ADD COLUMN etag TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE pages ADD COLUMN last_modified TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE pages ADD COLUMN last_validated DATETIME",
+		"ALTER TABLE pages ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0",
+	} {
+		if err := addColumn(stmt); err != nil {
+			return err
+		}
+	}
 	db.conn.Exec("CREATE INDEX IF NOT EXISTS idx_frontier_inbound ON frontier(inbound DESC)")
 	return nil
 }
@@ -327,15 +357,27 @@ func (db *DB) InsertPage(p *Page) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("marshal embedding: %w", err)
 	}
+	// last_validated tracks when we last confirmed the page is alive. For a
+	// fresh insert that's the same moment as crawled_at; if the caller didn't
+	// set it explicitly, default to crawled_at.
+	lastValidated := p.LastValidated
+	if lastValidated.IsZero() {
+		lastValidated = p.CrawledAt
+	}
 	res, err := db.conn.Exec(`
-		INSERT INTO pages (url, title, text_content, license_url, license_type, embedding, crawled_at, content_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO pages (url, title, text_content, license_url, license_type, embedding, crawled_at, content_hash, etag, last_modified, last_validated, consecutive_failures)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(url) DO UPDATE SET
 			title=excluded.title, text_content=excluded.text_content,
 			license_url=excluded.license_url, license_type=excluded.license_type,
 			embedding=excluded.embedding, crawled_at=excluded.crawled_at,
-			content_hash=excluded.content_hash`,
-		p.URL, p.Title, p.TextContent, p.LicenseURL, p.LicenseType, string(embJSON), p.CrawledAt, p.ContentHash)
+			content_hash=excluded.content_hash,
+			etag=excluded.etag, last_modified=excluded.last_modified,
+			last_validated=excluded.last_validated,
+			consecutive_failures=excluded.consecutive_failures`,
+		p.URL, p.Title, p.TextContent, p.LicenseURL, p.LicenseType, string(embJSON),
+		p.CrawledAt, p.ContentHash,
+		p.ETag, p.LastModified, lastValidated, p.ConsecutiveFailures)
 	if err != nil {
 		return 0, fmt.Errorf("insert page: %w", err)
 	}
@@ -351,19 +393,23 @@ func (db *DB) InsertPage(p *Page) (int64, error) {
 func (db *DB) GetPageByURL(url string) (*Page, error) {
 	p := &Page{}
 	var embJSON sql.NullString
-	err := db.conn.QueryRow("SELECT id, url, title, text_content, license_url, license_type, embedding, pagerank, quality, compilable, crawled_at, content_hash FROM pages WHERE url = ?", url).
-		Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseURL, &p.LicenseType, &embJSON, &p.PageRank, &p.Quality, &p.Compilable, &p.CrawledAt, &p.ContentHash)
+	var lastValidated sql.NullTime
+	err := db.conn.QueryRow("SELECT id, url, title, text_content, license_url, license_type, embedding, pagerank, quality, compilable, crawled_at, content_hash, etag, last_modified, last_validated, consecutive_failures FROM pages WHERE url = ?", url).
+		Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseURL, &p.LicenseType, &embJSON, &p.PageRank, &p.Quality, &p.Compilable, &p.CrawledAt, &p.ContentHash, &p.ETag, &p.LastModified, &lastValidated, &p.ConsecutiveFailures)
 	if err != nil {
 		return nil, err
 	}
 	if embJSON.Valid && embJSON.String != "" {
 		json.Unmarshal([]byte(embJSON.String), &p.Embedding)
 	}
+	if lastValidated.Valid {
+		p.LastValidated = lastValidated.Time
+	}
 	return p, nil
 }
 
 func (db *DB) AllPages() ([]*Page, error) {
-	rows, err := db.conn.Query("SELECT id, url, title, text_content, license_url, license_type, embedding, pagerank, quality, compilable, crawled_at, content_hash FROM pages")
+	rows, err := db.conn.Query("SELECT id, url, title, text_content, license_url, license_type, embedding, pagerank, quality, compilable, crawled_at, content_hash, etag, last_modified, last_validated, consecutive_failures FROM pages")
 	if err != nil {
 		return nil, err
 	}
@@ -373,11 +419,15 @@ func (db *DB) AllPages() ([]*Page, error) {
 	for rows.Next() {
 		p := &Page{}
 		var embJSON sql.NullString
-		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseURL, &p.LicenseType, &embJSON, &p.PageRank, &p.Quality, &p.Compilable, &p.CrawledAt, &p.ContentHash); err != nil {
+		var lastValidated sql.NullTime
+		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseURL, &p.LicenseType, &embJSON, &p.PageRank, &p.Quality, &p.Compilable, &p.CrawledAt, &p.ContentHash, &p.ETag, &p.LastModified, &lastValidated, &p.ConsecutiveFailures); err != nil {
 			return nil, err
 		}
 		if embJSON.Valid && embJSON.String != "" {
 			json.Unmarshal([]byte(embJSON.String), &p.Embedding)
+		}
+		if lastValidated.Valid {
+			p.LastValidated = lastValidated.Time
 		}
 		pages = append(pages, p)
 	}
@@ -387,6 +437,186 @@ func (db *DB) AllPages() ([]*Page, error) {
 func (db *DB) UpdatePageRank(id int64, rank float64) error {
 	_, err := db.conn.Exec("UPDATE pages SET pagerank = ? WHERE id = ?", rank, id)
 	return err
+}
+
+// --- Layer 1: revalidation ---
+
+// PagesForRevalidation returns pages ordered by last_validated ASC NULLS FIRST,
+// so the oldest (and never-validated) pages come first. Pass limit=0 for unlimited.
+func (db *DB) PagesForRevalidation(limit int) ([]*Page, error) {
+	q := `SELECT id, url, title, text_content, license_url, license_type, embedding,
+		pagerank, quality, compilable, crawled_at, content_hash,
+		etag, last_modified, last_validated, consecutive_failures
+		FROM pages
+		ORDER BY last_validated IS NULL DESC, last_validated ASC`
+	args := []any{}
+	if limit > 0 {
+		q += " LIMIT ?"
+		args = append(args, limit)
+	}
+	rows, err := db.conn.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var pages []*Page
+	for rows.Next() {
+		p := &Page{}
+		var embJSON sql.NullString
+		var lastValidated sql.NullTime
+		if err := rows.Scan(&p.ID, &p.URL, &p.Title, &p.TextContent, &p.LicenseURL, &p.LicenseType, &embJSON, &p.PageRank, &p.Quality, &p.Compilable, &p.CrawledAt, &p.ContentHash, &p.ETag, &p.LastModified, &lastValidated, &p.ConsecutiveFailures); err != nil {
+			return nil, err
+		}
+		if embJSON.Valid && embJSON.String != "" {
+			json.Unmarshal([]byte(embJSON.String), &p.Embedding)
+		}
+		if lastValidated.Valid {
+			p.LastValidated = lastValidated.Time
+		}
+		pages = append(pages, p)
+	}
+	return pages, nil
+}
+
+// UpdatePageValidators updates only the cache validator and revalidation
+// tracking columns. Used by the 304 Not Modified path and the unchanged-200
+// path where the body content didn't change.
+func (db *DB) UpdatePageValidators(id int64, etag, lastModified string, lastValidated time.Time, consecutiveFailures int) error {
+	_, err := db.conn.Exec(`
+		UPDATE pages SET etag = ?, last_modified = ?, last_validated = ?, consecutive_failures = ?
+		WHERE id = ?`,
+		etag, lastModified, lastValidated, consecutiveFailures, id)
+	return err
+}
+
+// UpdatePageContent updates text_content + content_hash + validators after a
+// changed-200 response, AND replaces the page's chunks atomically in the
+// same transaction. If chunk replacement fails, the page row update is
+// rolled back so the DB never lands in a state where the new content_hash
+// is committed but the chunks still reflect the old content.
+//
+// Resets consecutive_failures to 0 and clears the page-level embedding
+// (which was averaged from chunks of the old content and is now stale).
+// New chunks have NULL embeddings; the embed work queue will re-embed.
+func (db *DB) UpdatePageContent(id int64, textContent, contentHash, etag, lastModified string, lastValidated time.Time, chunks []Chunk) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`
+		UPDATE pages SET text_content = ?, content_hash = ?,
+			etag = ?, last_modified = ?, last_validated = ?,
+			consecutive_failures = 0, embedding = NULL
+		WHERE id = ?`,
+		textContent, contentHash, etag, lastModified, lastValidated, id); err != nil {
+		return fmt.Errorf("update page: %w", err)
+	}
+
+	if _, err := tx.Exec("DELETE FROM chunks WHERE page_id = ?", id); err != nil {
+		return fmt.Errorf("delete old chunks: %w", err)
+	}
+
+	for i, c := range chunks {
+		if db.chunkBloom != nil {
+			db.chunkBloom.add(c.Text)
+		}
+		var embJSON *string
+		if len(c.Embedding) > 0 {
+			b, err := json.Marshal(c.Embedding)
+			if err != nil {
+				return fmt.Errorf("marshal chunk embedding: %w", err)
+			}
+			s := string(b)
+			embJSON = &s
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO chunks (page_id, idx, text, embedding)
+			VALUES (?, ?, ?, ?)`,
+			id, i, c.Text, embJSON); err != nil {
+			return fmt.Errorf("insert new chunk: %w", err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// IncrementPageFailures bumps consecutive_failures for a page after a 404
+// or other persistent failure, advances last_validated to now (so the page
+// moves to the back of the revalidation queue and isn't retried until the
+// queue cycles), and returns the new count so the caller can decide whether
+// to delete the page.
+//
+// Uses SQLite's RETURNING clause to get the new count atomically — avoids
+// the race where two concurrent revalidators each increment and then SELECT
+// independently and miscount.
+func (db *DB) IncrementPageFailures(id int64, lastValidated time.Time) (int, error) {
+	var count int
+	err := db.conn.QueryRow(`
+		UPDATE pages
+		SET consecutive_failures = consecutive_failures + 1, last_validated = ?
+		WHERE id = ?
+		RETURNING consecutive_failures`, lastValidated, id).Scan(&count)
+	return count, err
+}
+
+// DeletePage removes a page row in a transaction. The chunks and
+// quality_reviews tables have ON DELETE CASCADE, so they're cleaned up
+// automatically when the foreign key fires (PRAGMA foreign_keys = ON is
+// set in migrate). The links table has no cascade — delete its rows
+// explicitly.
+func (db *DB) DeletePage(id int64) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM links WHERE from_page_id = ? OR to_page_id = ?", id, id); err != nil {
+		return fmt.Errorf("delete links: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM pages WHERE id = ?", id); err != nil {
+		return fmt.Errorf("delete page: %w", err)
+	}
+	return tx.Commit()
+}
+
+// ReplacePageChunks deletes all existing chunks for a page and inserts new ones
+// in a transaction. Used after content changes during revalidation. New chunks
+// have NULL embeddings, which the embed work queue will pick up automatically.
+func (db *DB) ReplacePageChunks(pageID int64, chunks []Chunk) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM chunks WHERE page_id = ?", pageID); err != nil {
+		return fmt.Errorf("delete chunks: %w", err)
+	}
+	for i, c := range chunks {
+		if db.chunkBloom != nil {
+			db.chunkBloom.add(c.Text)
+		}
+		var embJSON *string
+		if len(c.Embedding) > 0 {
+			b, err := json.Marshal(c.Embedding)
+			if err != nil {
+				return fmt.Errorf("marshal chunk embedding: %w", err)
+			}
+			s := string(b)
+			embJSON = &s
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO chunks (page_id, idx, text, embedding)
+			VALUES (?, ?, ?, ?)`,
+			pageID, i, c.Text, embJSON); err != nil {
+			return fmt.Errorf("insert chunk: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 func (db *DB) UpdateEmbedding(id int64, emb []float64) error {
@@ -499,8 +729,69 @@ func (db *DB) AddToFrontier(rawURL string, depth int) error {
 	return err
 }
 
-// NormalizeURL canonicalizes a URL: strips fragment, trailing slash,
-// upgrades http to https, and collapses forge URLs to owner/repo.
+// trackingParams are query parameters that don't affect page content but
+// may trigger redirects (e.g. ?share=linkedin). Stripping them at normalize
+// time means the share variant and the canonical URL deduplicate naturally.
+var trackingParams = map[string]bool{
+	// Social share buttons (often redirect to login/share dialog)
+	"share":  true,
+	"shared": true,
+	// Google Analytics / UTM
+	"utm_source":   true,
+	"utm_medium":   true,
+	"utm_campaign": true,
+	"utm_content":  true,
+	"utm_term":     true,
+	"utm_id":       true,
+	// Click-tracking IDs
+	"fbclid":  true,
+	"gclid":   true,
+	"dclid":   true,
+	"msclkid": true,
+	"yclid":   true,
+	"_ga":     true,
+	// Newsletter / mail
+	"mc_eid": true,
+	"mc_cid": true,
+	"_hsenc": true,
+	"_hsmi":  true,
+	// Misc referrer
+	"ref_src": true,
+}
+
+// stripTrackingParams removes known tracking and share-link query parameters,
+// leaving content-bearing params intact.
+func stripTrackingParams(u *url.URL) {
+	if u.RawQuery == "" {
+		return
+	}
+	q := u.Query()
+	changed := false
+	for k := range q {
+		if trackingParams[k] {
+			q.Del(k)
+			changed = true
+		}
+	}
+	if changed {
+		u.RawQuery = q.Encode()
+	}
+}
+
+// StripTrackingParams returns the URL with known tracking parameters removed.
+// Unlike NormalizeURL it does not upgrade scheme or collapse forge paths —
+// safe to call on URLs that will be fetched, including localhost test servers.
+func StripTrackingParams(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	stripTrackingParams(u)
+	return u.String()
+}
+
+// NormalizeURL canonicalizes a URL: strips fragment, trailing slash, tracking
+// params, upgrades http to https, and collapses forge URLs to owner/repo.
 func NormalizeURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -508,6 +799,7 @@ func NormalizeURL(rawURL string) string {
 	}
 	u.Fragment = ""
 	u.Path = strings.TrimRight(u.Path, "/")
+	stripTrackingParams(u)
 	// Canonical scheme: treat http and https as the same page.
 	if u.Scheme == "http" {
 		u.Scheme = "https"
@@ -589,6 +881,39 @@ func (db *DB) DeleteFrontierURL(rawURL string) {
 	db.conn.Exec("DELETE FROM frontier WHERE url = ?", rawURL)
 }
 
+// PrunePages deletes pages whose URLs match the provided filter, along with
+// their chunks, links, and quality reviews. Returns the number of pages removed.
+// Used to retroactively purge content that should never have been indexed.
+func (db *DB) PrunePages(shouldDelete URLFilter) (int64, error) {
+	if shouldDelete == nil {
+		return 0, nil
+	}
+
+	rows, err := db.conn.Query("SELECT id, url FROM pages")
+	if err != nil {
+		return 0, err
+	}
+	var toDelete []int64
+	for rows.Next() {
+		var id int64
+		var u string
+		rows.Scan(&id, &u)
+		if shouldDelete(u) {
+			toDelete = append(toDelete, id)
+		}
+	}
+	rows.Close()
+
+	for _, id := range toDelete {
+		db.conn.Exec("DELETE FROM chunks WHERE page_id = ?", id)
+		db.conn.Exec("DELETE FROM links WHERE from_page_id = ? OR to_page_id = ?", id, id)
+		db.conn.Exec("DELETE FROM quality_reviews WHERE page_id = ?", id)
+		db.conn.Exec("DELETE FROM pages WHERE id = ?", id)
+	}
+
+	return int64(len(toDelete)), nil
+}
+
 // scoredFrontier fetches frontier entries, overfetches 3x, scores with
 // log(1 + inbound) * (1 + noise), sorts, and returns top `limit`.
 // The noise term shuffles entries within the same inbound tier,
@@ -626,7 +951,6 @@ func (db *DB) scoredFrontier(limit int) ([]*FrontierEntry, error) {
 	}
 	return pool, nil
 }
-
 
 // URLFilter returns true if a URL should be excluded from the frontier.
 type URLFilter func(string) bool

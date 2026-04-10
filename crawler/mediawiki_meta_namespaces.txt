@@ -1,0 +1,35 @@
+# MediaWiki meta-namespace path prefixes — navigation and admin pages,
+# not articles. URLs whose path starts with one of these are blocked at
+# the resolve chain. Applies to all MediaWiki sites (Wikipedia, Wikibooks,
+# Wiktionary, Wikisource, etc.).
+#
+# Format: full path prefix, one per line. Comments start with #.
+
+/wiki/Category:
+/wiki/Special:
+/wiki/Help:
+/wiki/User:
+/wiki/User_talk:
+/wiki/Talk:
+/wiki/File:
+/wiki/Template:
+/wiki/Template_talk:
+/wiki/Portal:
+/wiki/MediaWiki:
+/wiki/Module:
+/wiki/Draft:
+
+# Project-specific self-named namespaces. Each Wikimedia project has its
+# own meta namespace following the pattern /wiki/<ProjectName>:
+/wiki/Wikipedia:
+/wiki/Wikipedia_talk:
+/wiki/Wiktionary:
+/wiki/Wikibooks:
+/wiki/Wikisource:
+/wiki/Wikivoyage:
+/wiki/Wikiquote:
+/wiki/Wikinews:
+/wiki/Wikiversity:
+/wiki/Wikidata:
+/wiki/Commons:
+/wiki/Meta:

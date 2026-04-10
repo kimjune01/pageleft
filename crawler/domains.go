@@ -11,6 +11,10 @@ import (
 //go:embed copyleft_domains.txt
 //go:embed blocked_domains.txt
 //go:embed frontier_blocked_domains.txt
+//go:embed binary_extensions.txt
+//go:embed mediawiki_meta_namespaces.txt
+//go:embed wikimedia_projects.txt
+//go:embed blocked_path_prefixes.txt
 var domainFiles embed.FS
 
 type DomainLicense struct {
@@ -34,6 +38,10 @@ func init() {
 	copyleftDomains = loadCopyleftDomains()
 	blockedDomains = loadBlockedDomains()
 	frontierBlockedDomains = loadDomainList("frontier_blocked_domains.txt")
+	binaryExtensions = loadStringList("binary_extensions.txt")
+	mediaWikiMetaNamespaces = loadStringList("mediawiki_meta_namespaces.txt")
+	wikimediaProjects = loadStringList("wikimedia_projects.txt")
+	blockedPathPrefixes = loadStringList("blocked_path_prefixes.txt")
 }
 
 // InitBloomFilters creates both filters.
@@ -118,19 +126,30 @@ func loadBlockedDomains() map[string]bool {
 
 func loadDomainList(filename string) map[string]bool {
 	m := make(map[string]bool)
+	for _, line := range loadStringList(filename) {
+		m[line] = true
+	}
+	return m
+}
+
+// loadStringList reads a text file from the embedded crawler/ directory and
+// returns each non-empty, non-comment line as a string. Used for any list
+// where order is irrelevant and full-line strings are the records.
+func loadStringList(filename string) []string {
 	data, err := domainFiles.ReadFile(filename)
 	if err != nil {
-		return m
+		return nil
 	}
+	var out []string
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		m[line] = true
+		out = append(out, line)
 	}
-	return m
+	return out
 }
 
 // IsFrontierBlocked returns true if the URL's domain should not enter the frontier.

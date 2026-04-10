@@ -22,6 +22,75 @@ import (
 	"golang.org/x/net/html"
 )
 
+// handleFrontierReject lets workers report URLs that failed with transient errors
+// (404, 403, timeout). Deletes the URLs from the frontier. If a domain appears
+// 3+ times in a single batch, learns it as non-permissive.
+// POST /api/frontier/reject  [{"url":"...","reason":"..."},...]
+func (h *Handler) handleFrontierReject(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1*1024*1024))
+	if err != nil {
+		http.Error(w, `{"error":"read body failed"}`, http.StatusBadRequest)
+		return
+	}
+
+	var items []struct {
+		URL    string `json:"url"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(body, &items); err != nil {
+		http.Error(w, `{"error":"invalid JSON, expected array"}`, http.StatusBadRequest)
+		return
+	}
+	if len(items) == 0 {
+		http.Error(w, `{"error":"empty batch"}`, http.StatusBadRequest)
+		return
+	}
+	if len(items) > 200 {
+		http.Error(w, `{"error":"max 200 items per batch"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Count rejections per domain to detect persistent failures.
+	// Only HTTP-level failures (status codes, timeouts) count toward domain
+	// learning. Client-side skips (binary extension, etc.) are just cleanup.
+	domainCounts := make(map[string]int)
+	deleted := 0
+	for _, item := range items {
+		if item.URL == "" {
+			continue
+		}
+		h.db.DeleteFrontierURL(item.URL)
+		deleted++
+		domain := crawler.ExtractDomain(item.URL)
+		if domain == "" {
+			continue
+		}
+		// Only count server-side failures toward domain learning.
+		// Binary extensions, client-side skips, etc. say nothing about the domain.
+		if strings.Contains(item.Reason, "status ") ||
+			strings.Contains(item.Reason, "timeout") ||
+			strings.Contains(item.Reason, "fetch failed") {
+			domainCounts[domain]++
+		}
+	}
+
+	// If a domain has 5+ HTTP failures in one batch, learn it as non-permissive.
+	// Threshold is intentionally conservative — false positives are permanent.
+	learned := 0
+	for domain, count := range domainCounts {
+		if count >= 5 {
+			crawler.LearnNonPermissive("https://" + domain)
+			learned++
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"deleted":         deleted,
+		"domains_learned": learned,
+	})
+}
+
 // handleFrontier returns frontier URLs for workers to crawl.
 // GET /api/frontier?limit=10
 func (h *Handler) handleFrontier(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +154,12 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Strip tracking params before fetch. The share-link variants
+	// (?share=linkedin, ?share=twitter) trigger off-domain redirects to
+	// login pages that pollute the index. We do not call full NormalizeURL
+	// here because that would upgrade http→https and break HTTP-only sites.
+	sub.URL = platform.StripTrackingParams(sub.URL)
+
 	// Fetch the page, verify copyleft license, and keep the parsed HTML.
 	result, err := fetchAndVerify(sub.URL)
 	if err != nil {
@@ -125,14 +200,18 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.db.LogContribution("crawl", platform.ContributorHash(r.RemoteAddr))
+	now := time.Now()
 	page := &platform.Page{
-		URL:         crawler.CanonicalPageURL(sub.URL),
-		Title:       sub.Title,
-		TextContent: sub.TextContent,
-		LicenseURL:  result.License.URL,
-		LicenseType: result.License.Type,
-		ContentHash: sub.ContentHash,
-		CrawledAt:   time.Now(),
+		URL:           crawler.CanonicalPageURL(sub.URL),
+		Title:         sub.Title,
+		TextContent:   sub.TextContent,
+		LicenseURL:    result.License.URL,
+		LicenseType:   result.License.Type,
+		ContentHash:   sub.ContentHash,
+		CrawledAt:     now,
+		ETag:          result.ETag,
+		LastModified:  result.LastModified,
+		LastValidated: now,
 	}
 
 	pageID, err := h.db.InsertPageWithLinks(page, sub.Links, crawler.ShouldBlockFrontierFrom(sub.URL))
@@ -284,7 +363,7 @@ func (h *Handler) handleWorkEmbed(w http.ResponseWriter, r *http.Request) {
 	// Chunk them from stored text_content and insert.
 	var allChunks []chunkWork
 	for _, p := range pages {
-		paragraphs := splitTextContent(p.TextContent)
+		paragraphs := SplitTextContent(p.TextContent)
 		if len(paragraphs) == 0 {
 			continue
 		}
@@ -320,9 +399,10 @@ func (h *Handler) handleWorkEmbed(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// splitTextContent splits plain text into paragraph-sized chunks.
-// Used when a page was stored without HTML parsing (no *html.Node available).
-func splitTextContent(text string) []string {
+// SplitTextContent splits plain text into paragraph-sized chunks.
+// Used when a page was stored without HTML parsing (no *html.Node available),
+// and by the prune-stale revalidator for text/plain and markdown bodies.
+func SplitTextContent(text string) []string {
 	var paragraphs []string
 	for _, p := range strings.Split(text, "\n") {
 		p = strings.TrimSpace(p)
@@ -550,15 +630,17 @@ func (h *Handler) handleContributeCompilable(w http.ResponseWriter, r *http.Requ
 
 // fetchResult holds the parsed page and license from a verification fetch.
 type fetchResult struct {
-	License  *crawler.LicenseInfo
-	Doc      *html.Node // nil for PDFs
-	FinalURL string
-	BodyHash string
+	License      *crawler.LicenseInfo
+	Doc          *html.Node // nil for PDFs
+	FinalURL     string
+	BodyHash     string
+	ETag         string
+	LastModified string
 	// PDF-only fields
-	IsPDF      bool
-	PDFTitle   string
-	PDFText    string
-	PDFChunks  []string
+	IsPDF     bool
+	PDFTitle  string
+	PDFText   string
+	PDFChunks []string
 }
 
 // fetchAndVerify runs the filter chain (crawler.Resolve), fetches the URL,
@@ -598,6 +680,16 @@ func fetchAndVerify(pageURL string) (*fetchResult, error) {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
 
+	// Off-domain redirect check: if the response landed on a different host
+	// than the requested URL, the cached res.License (from the original
+	// allowlisted domain) doesn't apply. This catches share-link tracking
+	// params like ?share=linkedin that redirect to login pages.
+	requestedDomain := crawler.ExtractDomain(fetchURL)
+	finalDomain := crawler.ExtractDomain(resp.Request.URL.String())
+	if requestedDomain != "" && finalDomain != "" && requestedDomain != finalDomain {
+		return nil, fmt.Errorf("redirect off-domain: %s → %s", requestedDomain, finalDomain)
+	}
+
 	contentType := resp.Header.Get("Content-Type")
 	isPDF := strings.Contains(contentType, "application/pdf")
 	isHTML := strings.Contains(contentType, "text/html")
@@ -613,17 +705,20 @@ func fetchAndVerify(pageURL string) (*fetchResult, error) {
 
 	h := fmt.Sprintf("%x", sha256.Sum256(bodyBytes))
 	finalURL := resp.Request.URL.String()
+	etag := resp.Header.Get("ETag")
+	lastModified := resp.Header.Get("Last-Modified")
 
 	if isPDF {
 		if res.License == nil {
 			return nil, fmt.Errorf("PDF requires domain-level license verification")
 		}
-		text, chunks, title, err := extractPDFContent(bodyBytes)
+		text, chunks, title, err := ExtractPDFContent(bodyBytes)
 		if err != nil {
 			return nil, fmt.Errorf("parse PDF: %w", err)
 		}
 		return &fetchResult{
 			License: res.License, FinalURL: finalURL, BodyHash: h,
+			ETag: etag, LastModified: lastModified,
 			IsPDF: true, PDFTitle: title, PDFText: text, PDFChunks: chunks,
 		}, nil
 	}
@@ -642,7 +737,10 @@ func fetchAndVerify(pageURL string) (*fetchResult, error) {
 		return nil, fmt.Errorf("no copyleft license found")
 	}
 
-	return &fetchResult{License: license, Doc: doc, FinalURL: finalURL, BodyHash: h}, nil
+	return &fetchResult{
+		License: license, Doc: doc, FinalURL: finalURL, BodyHash: h,
+		ETag: etag, LastModified: lastModified,
+	}, nil
 }
 
 // fetchForgeReadme fetches a raw README from a forge and wraps it in HTML.
@@ -665,6 +763,17 @@ func fetchForgeReadme(pageURL string, res crawler.Resolution) (*fetchResult, err
 
 	h := fmt.Sprintf("%x", sha256.Sum256(body))
 
+	// Forge pages are stored under the canonical github.com/owner/repo URL,
+	// but the README is fetched from raw.githubusercontent.com — a different
+	// resource with its own ETag and Last-Modified. Storing the raw README's
+	// validators against the page URL would be semantically wrong because
+	// Layer 1's conditional GET would target the wrong endpoint.
+	//
+	// Until Layer 1 decides how to handle forge revalidation (e.g. by storing
+	// the fetch URL alongside the page URL, or by always doing unconditional
+	// fetches for forge content), we deliberately leave ETag and LastModified
+	// empty for forge pages.
+
 	// Wrap markdown lines in <p> tags for the paragraph extractor
 	htmlStr := "<html><body><article>"
 	for _, line := range strings.Split(string(body), "\n") {
@@ -684,8 +793,8 @@ func fetchForgeReadme(pageURL string, res crawler.Resolution) (*fetchResult, err
 	return &fetchResult{License: res.License, Doc: doc, FinalURL: pageURL, BodyHash: h}, nil
 }
 
-// extractPDFContent extracts text from PDF bytes, splits into chunks by page.
-func extractPDFContent(data []byte) (fullText string, chunks []string, title string, err error) {
+// ExtractPDFContent extracts text from PDF bytes, splits into chunks by page.
+func ExtractPDFContent(data []byte) (fullText string, chunks []string, title string, err error) {
 	tmpFile, err := os.CreateTemp("", "pageleft-*.pdf")
 	if err != nil {
 		return "", nil, "", fmt.Errorf("create temp file: %w", err)
