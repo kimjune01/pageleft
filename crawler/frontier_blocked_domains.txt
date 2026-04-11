@@ -74,9 +74,10 @@ wikisource.org
 wikiversity.org
 wikinews.org
 
-# Wikimedia Foundation governance wiki — meta/policy content with path-based
-# language variants (/nb, /de, /es) that bypass the subdomain language check.
+# Wikimedia Foundation — governance wiki and corporate site. Staff profiles,
+# annual reports, non-English variants. Thin pages, not expressions.
 foundation.wikimedia.org
+wikimediafoundation.org
 
 # Wikimedia non-text projects — not language-versioned, not text expressions.
 commons.wikimedia.org
