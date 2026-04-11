@@ -74,20 +74,12 @@ wikisource.org
 wikiversity.org
 wikinews.org
 
-# Wikimedia Foundation — governance wiki and corporate site. Staff profiles,
-# annual reports, non-English variants. Thin pages, not expressions.
-foundation.wikimedia.org
+# Wikimedia — block the entire domain. Too many thin subdomains
+# (office, collab, incubator, donate, wikitech, etc.) leaking through.
+# Wikipedia, Wikibooks, and techblog are allowed via separate domain checks
+# that fire before this rule (Wikimedia allowlist in resolve.go, step 7).
+wikimedia.org
 wikimediafoundation.org
-
-# Wikimedia infrastructure — ops runbooks, donation pages.
-# Not copyleft expressions. techblog kept — real engineering posts.
-wikitech.wikimedia.org
-donate.wikimedia.org
-
-# Wikimedia non-text projects — not language-versioned, not text expressions.
-commons.wikimedia.org
-meta.wikimedia.org
-species.wikimedia.org
 
 # Wikidata — structured RDF-style data records (Q-codes), not text expressions.
 wikidata.org
