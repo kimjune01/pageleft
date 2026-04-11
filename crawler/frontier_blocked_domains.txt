@@ -63,6 +63,10 @@ predictionbook.com
 # via "Terms with X translations" categories. Reference, not expression.
 wiktionary.org
 
+# Wikiquote — aggregated quote collections, not original expression.
+# Scores 0.50-0.60 quality — thin signal, high volume.
+wikiquote.org
+
 # Wikimedia Foundation governance wiki — meta/policy content with path-based
 # language variants (/nb, /de, /es) that bypass the subdomain language check.
 foundation.wikimedia.org
