@@ -1118,11 +1118,14 @@ func (db *DB) ChunkCount() (int, error) {
 
 // --- Quality ---
 
-// RandomPagesForReview returns random pages for quality review.
+// RandomPagesForReview returns random pages that have no quality review yet.
 func (db *DB) RandomPagesForReview(limit int) ([]*Page, error) {
 	rows, err := db.conn.Query(`
-		SELECT id, url, title, text_content, license_type, quality
-		FROM pages ORDER BY RANDOM() LIMIT ?`, limit)
+		SELECT p.id, p.url, p.title, p.text_content, p.license_type, p.quality
+		FROM pages p
+		LEFT JOIN quality_reviews qr ON qr.page_id = p.id
+		WHERE qr.id IS NULL
+		ORDER BY RANDOM() LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
