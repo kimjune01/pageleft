@@ -140,6 +140,11 @@ func cmdServe(dbPath string) {
 	}()
 
 	embedder := platform.NewEmbedder()
+	if embedder.IsLocal() {
+		log.Printf("embedder: local (127.0.0.1:8081)")
+	} else {
+		log.Printf("embedder: HuggingFace Inference API")
+	}
 	h := handler.New(db, embedder, Version)
 
 	addr := ":" + *port

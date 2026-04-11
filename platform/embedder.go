@@ -15,15 +15,17 @@ const (
 	EmbeddingModel = "BAAI/bge-small-en-v1.5"
 	EmbeddingDim   = 384
 	hfEndpoint     = "https://router.huggingface.co/hf-inference/models/" + EmbeddingModel + "/pipeline/feature-extraction"
+	localEndpoint  = "http://127.0.0.1:8081"
 )
 
 type Embedder struct {
 	httpClient *http.Client
 	hfToken    string
+	useLocal   bool
 }
 
 func NewEmbedder() *Embedder {
-	return &Embedder{
+	e := &Embedder{
 		hfToken: os.Getenv("HF_TOKEN"),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
@@ -37,6 +39,19 @@ func NewEmbedder() *Embedder {
 			},
 		},
 	}
+	// Probe local embed server at startup
+	probe, err := http.NewRequest("POST", localEndpoint, bytes.NewReader([]byte(`{"inputs":"probe"}`)))
+	if err == nil {
+		probe.Header.Set("Content-Type", "application/json")
+		probeClient := &http.Client{Timeout: 5 * time.Second}
+		if resp, err := probeClient.Do(probe); err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				e.useLocal = true
+			}
+		}
+	}
+	return e
 }
 
 // EmbedQuery prepends the BGE instruction prefix for retrieval queries.
@@ -45,18 +60,27 @@ func (e *Embedder) EmbedQuery(text string) ([]float64, error) {
 	return e.Embed("Represent this sentence for searching relevant passages: " + text)
 }
 
+func (e *Embedder) endpoint() string {
+	if e.useLocal {
+		return localEndpoint
+	}
+	return hfEndpoint
+}
+
+func (e *Embedder) IsLocal() bool { return e.useLocal }
+
 func (e *Embedder) Embed(text string) ([]float64, error) {
 	body, err := json.Marshal(map[string]string{"inputs": text})
 	if err != nil {
 		return nil, fmt.Errorf("marshal embed request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", hfEndpoint, bytes.NewReader(body))
+	req, err := http.NewRequest("POST", e.endpoint(), bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("create HF request: %w", err)
+		return nil, fmt.Errorf("create embed request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if e.hfToken != "" {
+	if !e.useLocal && e.hfToken != "" {
 		req.Header.Set("Authorization", "Bearer "+e.hfToken)
 	}
 
@@ -89,12 +113,12 @@ func (e *Embedder) EmbedBatch(texts []string) ([][]float64, error) {
 		return nil, fmt.Errorf("marshal embed request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", hfEndpoint, bytes.NewReader(body))
+	req, err := http.NewRequest("POST", e.endpoint(), bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("create HF request: %w", err)
+		return nil, fmt.Errorf("create embed request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if e.hfToken != "" {
+	if !e.useLocal && e.hfToken != "" {
 		req.Header.Set("Authorization", "Bearer "+e.hfToken)
 	}
 
