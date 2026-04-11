@@ -87,17 +87,26 @@ func Resolve(rawURL string) Resolution {
 		}
 	}
 
-	// 4. Bloom filters (static + dynamic — non-permissive domains)
-	if IsNonPermissive(domain) {
-		return Resolution{Action: Block, Reason: "domain non-permissive (bloom)"}
-	}
-
-	// 5. Code forge (GitHub, Codeberg) — check license via API, fetch README
+	// 4. Code forge (GitHub, Codeberg) — check license via API, fetch README.
+	// Must precede Bloom filter: github.com hosts both permissive and copyleft
+	// repos, so domain-level blocking would reject all of them.
 	if owner, repo, ok := parseForgeURL(rawURL); ok {
 		return resolveForge(rawURL, owner, repo)
 	}
 
-	// 6. Wikipedia/Wikimedia — rewrite to REST API, license is CC BY-SA
+	// 5. Bloom filters (static + dynamic — non-permissive domains)
+	if IsNonPermissive(domain) {
+		return Resolution{Action: Block, Reason: "domain non-permissive (bloom)"}
+	}
+
+	// 6. Frontier blocked (superset: paywalls, social, noise)
+	// Must precede Wikimedia allowlist: wikiquote.org is a valid Wikimedia
+	// project with CC BY-SA, but we block it as low-signal content.
+	if matchDomain(frontierBlockedDomains, domain) {
+		return Resolution{Action: Block, Reason: "domain not indexable"}
+	}
+
+	// 7. Wikipedia/Wikimedia — rewrite to REST API, license is CC BY-SA
 	if title, ok := parseWikimediaURL(rawURL); ok {
 		u, _ := url.Parse(rawURL)
 		return Resolution{
@@ -105,11 +114,6 @@ func Resolve(rawURL string) Resolution {
 			License:  &LicenseInfo{URL: "https://creativecommons.org/licenses/by-sa/3.0/", Type: "CC BY-SA"},
 			FetchURL: fmt.Sprintf("https://%s/api/rest_v1/page/html/%s", u.Host, title),
 		}
-	}
-
-	// 7. Frontier blocked (superset: paywalls, social, noise)
-	if matchDomain(frontierBlockedDomains, domain) {
-		return Resolution{Action: Block, Reason: "domain not indexable"}
 	}
 
 	// 8. Unknown — allow, per-page detection at fetch time
