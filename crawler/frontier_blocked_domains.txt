@@ -67,6 +67,13 @@ wiktionary.org
 # Scores 0.50-0.60 quality — thin signal, high volume.
 wikiquote.org
 
+# Wikimedia sister sites — thin reference content that dominates the index
+# via Wikipedia sidebar links. Keep Wikipedia and Wikibooks only.
+wikivoyage.org
+wikisource.org
+wikiversity.org
+wikinews.org
+
 # Wikimedia Foundation governance wiki — meta/policy content with path-based
 # language variants (/nb, /de, /es) that bypass the subdomain language check.
 foundation.wikimedia.org
