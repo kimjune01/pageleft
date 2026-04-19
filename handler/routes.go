@@ -196,23 +196,48 @@ func (h *Handler) handleRoot(w http.ResponseWriter, r *http.Request) {
 	pages, _ := h.db.PageCount()
 	chunks, _ := h.db.ChunkCount()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, `PageLeft 🍄 a search engine for copyleft expressions.
-%d pages, %d chunks indexed.
+	fmt.Fprintf(w, `PageLeft 🍄
 
-Read more: https://www.june.kim/pageleft-manifesto
-Source:    https://github.com/kimjune01/pageleft
+PageLeft is a search index of web pages published under share-alike
+licenses (CC BY-SA, GFDL, AGPL, and compatible), so that free writing
+and code can be found, quoted, and composed into new work under the
+same license.
+
+%d pages indexed, %d text chunks. Pages under non-share-alike licenses
+(including CC BY-ND and all proprietary licenses) are excluded by
+design.
+
+What it does
+  Given a natural-language query, it returns the chunks most relevant
+  to the query, with source URL and detected license attached. A human
+  or a coding agent can then read, quote, or adapt them into new work
+  under the same license.
 
 API
-  GET  /api/search?q=<query>          Search by natural language
-  GET  /api/stats                     Index stats
-  GET  /api/leaderboard               Contributor rankings
+  GET  /api/search?q=<query>     search by natural language
+  GET  /api/stats                index size
+  GET  /api/leaderboard          contributor rankings
+  POST /api/contribute/page      submit a URL for indexing
 
+Example
+  curl https://pageleft.cc/api/search?q=copyleft+ratchet
+
+Use in a coding agent
+  Any agent that can make HTTP requests can use PageLeft as a parts
+  bin for free software and prose. Point the agent at /api/search,
+  have it include the returned URL and license with any quoted or
+  adapted text, and the output is composable by construction.
+
+  For Claude Code specifically:
+    claude plugin marketplace add kimjune01/pageleft
+    claude plugin install pageleft@pageleft
+
+Source
+  https://codeberg.org/kimjune01/pageleft   (Forgejo, no nonfree JS required)
+  https://github.com/kimjune01/pageleft     (mirror)
+
+Read more: https://www.june.kim/pageleft
 Contribute: https://pageleft.cc/contribute
-
-Try:  curl https://pageleft.cc/api/search?q=open+source+licensing
-
-Claude Code Plugin
-  claude plugin marketplace add kimjune01/pageleft
-  claude plugin install pageleft@pageleft
+License: AGPL-3.0 (code), CC BY-SA 4.0 (indexed content)
 `, pages, chunks)
 }
