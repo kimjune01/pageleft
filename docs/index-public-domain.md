@@ -63,6 +63,9 @@ Pick ONE source to explore from scratch. Roll a random number mentally — don't
 - Historical standards bodies (early IEEE, ANSI predecessors)
 - Philosophy texts that ground computable practices
 
+**Auto-harvested — don't index manually:**
+- [Zenodo](https://zenodo.org/) CC BY-SA / CC0 publications are covered by `cmd/zenodo-drip`, which extracts PDF text worker-side and submits the full document. Don't spend a rollout on Zenodo PDFs — the drip already sweeps them. Explore Zenodo only for its *HTML* landing pages that link out to other free sources, and follow those links instead.
+
 If a previous agent left notes saying a branch was barren, skip it. If a previous agent said a branch was rich, go deeper there.
 
 ### 2. EXPAND — find specific pages

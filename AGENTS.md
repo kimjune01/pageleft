@@ -8,6 +8,7 @@
 - Go server (HTTP + SQLite), HF free tier for embeddings via `platform/embedder.go`
 - Public `POST /api/embed` proxies the server's HF token — no local model needed
 - `./drain.sh` drains the embed queue using only the public API
+- `cmd/zenodo-drip` harvests CC BY-SA / CC0 publications from Zenodo, extracts PDF text worker-side, and submits full text via `POST /api/contribute/page` — runs from any machine, no server access needed
 - Embedding model declared as constants in `platform/embedder.go` (`EmbeddingModel`, `EmbeddingDim`)
 
 ## Production

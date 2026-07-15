@@ -119,3 +119,4 @@ If yes, index it. If the page is background reading but not buildable, skip it �
 - [RFC Editor](https://www.rfc-editor.org/) — full RFC corpus
 - [NASA Technical Reports Server](https://ntrs.nasa.gov/)
 - [NIST publications](https://www.nist.gov/publications)
+- [Zenodo](https://zenodo.org/) — CC BY-SA and CC0 publications. **Automated**: `cmd/zenodo-drip` harvests this source (searches the API, extracts PDF text worker-side, submits full text). Manual agents should deprioritize Zenodo and cover ground the drip can't — HTML sources, non-PDF pages, and repositories without a machine-readable license.
