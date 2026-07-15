@@ -38,6 +38,12 @@ const maxPDFBytes = 30 << 20
 // anything longer is truncated at a page boundary.
 const maxTextBytes = 3 << 20
 
+// extractTimeout bounds PDF text extraction. Some PDFs (malformed font or
+// content-stream tables) make ledongthuc/pdf loop indefinitely — observed
+// firsthand on a real Zenodo record (id 3478412), which hung 30s+ with no
+// CPU-bound progress. A bad PDF must not be able to stall the whole drip.
+const extractTimeout = 20 * time.Second
+
 // zenodoLicenses maps Zenodo license IDs to pageleft license info.
 // Only composable copyleft and public domain licenses — mirrors
 // crawler/license.go and crawler/forge.go.
@@ -215,9 +221,11 @@ func processRecord(cfg config, rec zenodoRecord, recordURL string) (bool, error)
 	if err != nil {
 		return false, fmt.Errorf("download %s: %w", file.Key, err)
 	}
-	text, err := extractPDFText(pdfBytes)
+	text, err := extractPDFTextTimeout(pdfBytes, extractTimeout)
 	if err != nil || strings.TrimSpace(text) == "" {
-		// No extractable text layer (scanned PDF). Permanent — OCR is out of scope.
+		// No extractable text layer (scanned PDF), or extraction hung on a
+		// pathological font/content stream. Permanent either way — OCR and
+		// PDF-library debugging are both out of scope for this worker.
 		log.Printf("  skip %s: no text layer (%v)", recordURL, err)
 		return false, nil
 	}
@@ -325,6 +333,28 @@ func download(fileURL string) ([]byte, error) {
 		return nil, fmt.Errorf("body exceeds %d bytes", maxPDFBytes)
 	}
 	return data, nil
+}
+
+// extractPDFTextTimeout runs extractPDFText on a goroutine and bails out
+// after d. The goroutine is leaked (the pdf library gives no way to cancel
+// mid-parse) but is bounded by process lifetime, and the caller treats a
+// timeout as a permanent skip so it never retries the same record.
+func extractPDFTextTimeout(data []byte, d time.Duration) (string, error) {
+	type result struct {
+		text string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		text, err := extractPDFText(data)
+		done <- result{text, err}
+	}()
+	select {
+	case r := <-done:
+		return r.text, r.err
+	case <-time.After(d):
+		return "", fmt.Errorf("extraction exceeded %s", d)
+	}
 }
 
 // extractPDFText pulls the text layer out of a PDF, one line per page,
