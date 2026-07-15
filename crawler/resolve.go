@@ -95,7 +95,9 @@ func Resolve(rawURL string) Resolution {
 	}
 
 	// 5. Bloom filters (static + dynamic — non-permissive domains)
-	if IsNonPermissive(domain) {
+	// Multi-tenant domains (Zenodo etc.) are exempt: license varies per
+	// record, so one rejection is not evidence about the domain.
+	if !multiTenantDomains[domain] && IsNonPermissive(domain) {
 		return Resolution{Action: Block, Reason: "domain non-permissive (bloom)"}
 	}
 

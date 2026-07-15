@@ -26,6 +26,14 @@ var copyleftDomains map[string]DomainLicense
 var blockedDomains map[string]bool
 var frontierBlockedDomains map[string]bool
 
+// multiTenantDomains host records under many different licenses, so a
+// license failure on one record says nothing about the domain as a whole.
+// Exempt from bloom learning and lookup — always fall through to per-page
+// detection, same rationale as the code forge exemption in resolve.go.
+var multiTenantDomains = map[string]bool{
+	"zenodo.org": true,
+}
+
 // Two Bloom filters, one concern each:
 //   StaticFilter  — rebuilt from text files + UT1 on deploy. Deterministic.
 //   DynamicFilter — starts empty, grows from runtime license failures. Never rebuilt.
@@ -171,7 +179,7 @@ func IsFrontierBlocked(rawURL string) bool {
 // the static filter is rebuilt from text files on deploy.
 func LearnNonPermissive(rawURL string) {
 	domain := ExtractDomain(rawURL)
-	if domain == "" || DynamicFilter == nil {
+	if domain == "" || DynamicFilter == nil || multiTenantDomains[domain] {
 		return
 	}
 	DynamicFilter.Add(domain)
