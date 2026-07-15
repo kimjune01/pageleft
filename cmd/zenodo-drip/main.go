@@ -47,10 +47,18 @@ const extractTimeout = 20 * time.Second
 // zenodoLicenses maps Zenodo license IDs to pageleft license info.
 // Only composable copyleft and public domain licenses — mirrors
 // crawler/license.go and crawler/forge.go.
+// Keyed by what metadata.license.id actually comes back as on a record,
+// which is NOT always what the search query's rights.id filter accepts.
+// Verified empirically: cc-by-sa-4.0/3.0 round-trip identically, but a
+// "cc0-1.0" search filter returns records whose license.id field is the
+// older "cc-zero" — Zenodo's query and response vocabularies disagree for
+// CC0 specifically. Without this entry every CC0 record was rejected as
+// an unrecognized license (100% skip rate, silently, for this bucket).
 var zenodoLicenses = map[string]struct{ Type, URL string }{
 	"cc-by-sa-4.0": {"CC BY-SA", "https://creativecommons.org/licenses/by-sa/4.0/"},
 	"cc-by-sa-3.0": {"CC BY-SA", "https://creativecommons.org/licenses/by-sa/3.0/"},
 	"cc0-1.0":      {"CC0", "https://creativecommons.org/publicdomain/zero/1.0/"},
+	"cc-zero":      {"CC0", "https://creativecommons.org/publicdomain/zero/1.0/"},
 }
 
 type zenodoFile struct {
@@ -140,8 +148,15 @@ func run(cfg config) (int, error) {
 	submitted := 0
 	for _, lic := range cfg.Licenses {
 		for year := cfg.YearFrom; year <= cfg.YearTo; year++ {
+			// filetype:pdf is a real precision filter, not just an
+			// optimization: verified empirically that roughly half of
+			// Zenodo's CC0 "publication" records have no PDF at all (many
+			// are test/placeholder deposits — e.g. record 13807, whose
+			// title and description are Faker-generated Latin filler).
+			// Filtering here means we never even page through those, and
+			// what we do page through is denser with real hits.
 			q := fmt.Sprintf(
-				`metadata.rights.id:"%s" AND metadata.resource_type.id:publication* AND created:[%d-01-01 TO %d-12-31]`,
+				`metadata.rights.id:"%s" AND metadata.resource_type.id:publication* AND filetype:pdf AND created:[%d-01-01 TO %d-12-31]`,
 				lic, year, year)
 			for page := 1; ; page++ {
 				records, err := searchPage(cfg.ZenodoAPI, q, page)
