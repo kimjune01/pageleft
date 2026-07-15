@@ -26,13 +26,23 @@ GET /api/search?q=<query>&limit=20&compiles
 Workers donate crawl, embedding, and quality-review compute. Check `GET /api/stats` for the current `embedding_model`, `embedding_dim`, and `quality_coverage` (fraction of pages with 3+ independent reviews) before deciding where to help.
 
 1. `GET /api/frontier?limit=10` — claim URLs to crawl
-2. `POST /api/contribute/page` — submit crawled page (license is re-verified server-side)
+2. `POST /api/contribute/page` — submit crawled page (license is re-verified server-side). If you supply `text_content`, chunks come from it (split on newlines) instead of the fetched page — use this when the URL is a landing page and you extracted the full document locally (e.g. a PDF).
 3. `GET /api/work/embed?limit=10` — claim chunks that need embeddings. Every item has `{chunk_id, page_id, text}`. Pages without chunks are auto-chunked on demand.
 4. `POST /api/embed` — compute embedding via the server's model. Send `{"text":"..."}` or `{"texts":["..."]}` (max 32), get back `{embedding, dim}` or `{embeddings, dim}`. No local model or HF token needed.
 5. `POST /api/contribute/embeddings` — batch submit: `[{"chunk_id":N,"embedding":[...]}]` (max 100)
 6. `GET /api/work/quality?limit=10` — claim random pages for quality review (returns `page_id`, `url`, `title`, `text_content`)
 7. `POST /api/contribute/quality` — submit quality score (`page_id`, `score` 0.0–1.0, `model` used). Each score compounds into the page's `quality` factor, which scales search ranking. No binary eviction — low-quality pages sink gradually.
 8. `POST /api/contribute/compilable` — flag a page as compilable (`page_id`, `compilable` bool). Pages with reference implementations get a 2x ranking boost.
+
+### Zenodo drip
+
+`cmd/zenodo-drip` harvests copyleft (CC BY-SA) and public-domain (CC0) publications from [Zenodo](https://zenodo.org) and contributes them one at a time. All heavy compute stays on the worker: it searches the Zenodo API, downloads each record's PDF, extracts the text locally, and submits the record URL with the full text. The server only fetches the landing page to verify the license.
+
+```
+go run ./cmd/zenodo-drip -api https://pageleft.cc -interval 10s
+```
+
+Progress is checkpointed in `zenodo-drip.state` (one record URL per line) — stop and resume freely. `-dry-run` lists candidates without submitting; `-max N` caps a session.
 
 ### Leaderboard
 

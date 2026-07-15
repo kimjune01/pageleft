@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kimjune01/pageleft/platform"
 )
@@ -142,6 +143,51 @@ func TestContributePage_WorkerPayload_PreservesFields(t *testing.T) {
 	}
 	if page.TextContent != "Worker extracted this text content for the page." {
 		t.Errorf("text_content was overwritten — server should preserve worker-provided content")
+	}
+}
+
+func TestContributePage_WorkerPayload_ChunksFromWorkerText(t *testing.T) {
+	// The landing page a server fetches for license verification may hold only
+	// an abstract (e.g. a Zenodo record page), while the worker extracted the
+	// full text locally. Chunks must come from the worker's text_content, not
+	// the landing page HTML — otherwise search only ever matches the abstract.
+	fakeSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(copyleftPage()))
+	}))
+	defer fakeSite.Close()
+
+	h, cleanup := newTestHandler(t)
+	defer cleanup()
+
+	// Unique text per run: the chunk bloom filter persists to chunk-seen.bloom
+	// in the working directory across test runs, and InsertChunks silently
+	// skips any chunk text it has seen before.
+	unique := fmt.Sprintf("%d", time.Now().UnixNano())
+	workerText := "Worker paragraph one (" + unique + "), extracted from the full PDF text locally.\nWorker paragraph two (" + unique + "), also from the PDF and long enough to keep."
+	body := `{"url":"` + fakeSite.URL + `/record","title":"Worker Title","text_content":"` +
+		strings.ReplaceAll(workerText, "\n", `\n`) + `"}`
+	req := httptest.NewRequest("POST", "/api/contribute/page", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Mux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	chunks, err := h.db.ChunksWithoutEmbeddings(10)
+	if err != nil {
+		t.Fatalf("read chunks: %v", err)
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("chunks = %d, want 2 (from worker text): %s", len(chunks), rec.Body.String())
+	}
+	for _, c := range chunks {
+		if !strings.HasPrefix(c.Text, "Worker paragraph") {
+			t.Errorf("chunk %q came from the landing page, not the worker text", c.Text)
+		}
 	}
 }
 

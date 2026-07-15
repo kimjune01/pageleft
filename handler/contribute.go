@@ -177,6 +177,7 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fill in any fields the submitter didn't provide.
+	workerText := sub.TextContent != ""
 	if result.IsPDF {
 		if sub.Title == "" {
 			sub.Title = result.PDFTitle
@@ -222,10 +223,16 @@ func (h *Handler) handleContributePage(w http.ResponseWriter, r *http.Request) {
 	h.maybeReindex()
 
 	// Extract paragraphs and insert as chunks (embeddings come from the work queue).
+	// Worker-supplied text wins: the URL the server fetched for license
+	// verification may be a landing page holding only an abstract, while the
+	// worker extracted the full document locally.
 	var paragraphs []string
-	if result.IsPDF {
+	switch {
+	case workerText:
+		paragraphs = SplitTextContent(sub.TextContent)
+	case result.IsPDF:
 		paragraphs = result.PDFChunks
-	} else {
+	default:
 		paragraphs = crawler.ExtractParagraphs(result.Doc)
 	}
 	chunks := make([]platform.Chunk, 0, len(paragraphs))

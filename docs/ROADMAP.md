@@ -19,6 +19,7 @@ PageLeft is a search engine for ideas that chose to be free. Semantic search ove
 
 ### Done
 
+- Zenodo drip (`cmd/zenodo-drip`): harvests copyleft publications from the Zenodo API, extracts PDF text worker-side, submits via `/api/contribute/page`. Worker-supplied `text_content` now becomes the chunks, so full documents are searchable when the server only fetched a landing page for license verification.
 - Semantic search over copyleft-licensed pages (CC BY-SA, AGPL, GPL, etc.)
 - Per-paragraph chunk embeddings (BGE-small-en-v1.5, 384D) with 50-char minimum to filter nav fragments
 - BGE query prefix: `EmbedQuery()` prepends the retrieval instruction BGE expects, widening score discrimination from stdev 0.03 to 0.07
