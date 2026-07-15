@@ -495,7 +495,7 @@ func (h *Handler) handleContributeEmbeddings(w http.ResponseWriter, r *http.Requ
 	if accepted > 0 {
 		h.db.LogContribution("embed", contributor)
 		if len(completedPages) > 0 {
-			h.invalidateChunkCache()
+			h.invalidateChunkCache(completedPages)
 		}
 	}
 

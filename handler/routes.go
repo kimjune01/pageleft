@@ -20,9 +20,10 @@ type Handler struct {
 	version  string
 
 	// Chunk cache: loaded once, invalidated when embeddings change.
-	chunkMu    sync.RWMutex
-	chunkCache []platform.ChunkWithPage
-	chunkDirty bool
+	chunkMu           sync.RWMutex
+	chunkCache        []platform.CachedChunk
+	chunkLoaded       bool
+	chunkPendingPages map[int64]struct{}
 
 	// Auto-reindex: track page count at last PageRank computation.
 	lastReindexCount int
@@ -31,20 +32,20 @@ type Handler struct {
 func New(db *platform.DB, embedder *platform.Embedder, version string) *Handler {
 	pageCount, _ := db.PageCount()
 	h := &Handler{
-		db:               db,
-		embedder:         embedder,
-		robots:           crawler.NewRobotsChecker(&http.Client{Timeout: 10 * time.Second}),
-		version:          version,
-		chunkDirty:       true, // load on first search
-		lastReindexCount: pageCount,
+		db:                db,
+		embedder:          embedder,
+		robots:            crawler.NewRobotsChecker(&http.Client{Timeout: 10 * time.Second}),
+		version:           version,
+		chunkPendingPages: make(map[int64]struct{}),
+		lastReindexCount:  pageCount,
 	}
 	return h
 }
 
 // cachedChunks returns the chunk cache, reloading from DB if dirty.
-func (h *Handler) cachedChunks() []platform.ChunkWithPage {
+func (h *Handler) cachedChunks() []platform.CachedChunk {
 	h.chunkMu.RLock()
-	if !h.chunkDirty {
+	if h.chunkLoaded && len(h.chunkPendingPages) == 0 {
 		defer h.chunkMu.RUnlock()
 		return h.chunkCache
 	}
@@ -52,25 +53,59 @@ func (h *Handler) cachedChunks() []platform.ChunkWithPage {
 
 	h.chunkMu.Lock()
 	defer h.chunkMu.Unlock()
-	// Double-check after acquiring write lock
-	if !h.chunkDirty {
+	if h.chunkLoaded && len(h.chunkPendingPages) == 0 {
 		return h.chunkCache
 	}
-	chunks, err := h.db.AllChunksWithPages()
-	if err != nil {
-		log.Printf("chunk cache reload failed: %v", err)
-		return h.chunkCache // return stale
+
+	if !h.chunkLoaded {
+		chunks, err := h.db.AllCachedChunks()
+		if err != nil {
+			log.Printf("chunk cache load failed: %v", err)
+			return h.chunkCache
+		}
+		h.chunkCache = chunks
+		h.chunkLoaded = true
+		clear(h.chunkPendingPages)
+		log.Printf("chunk cache loaded: %d chunks", len(chunks))
+		return h.chunkCache
 	}
-	h.chunkCache = chunks
-	h.chunkDirty = false
-	log.Printf("chunk cache loaded: %d chunks", len(chunks))
+
+	pageIDs := make([]int64, 0, len(h.chunkPendingPages))
+	for pageID := range h.chunkPendingPages {
+		pageIDs = append(pageIDs, pageID)
+	}
+	chunks, err := h.db.CachedChunksForPages(pageIDs)
+	if err != nil {
+		log.Printf("chunk cache incremental reload failed: %v", err)
+		return h.chunkCache
+	}
+	pending := make(map[int64]struct{}, len(h.chunkPendingPages))
+	for _, pageID := range pageIDs {
+		pending[pageID] = struct{}{}
+	}
+	next := make([]platform.CachedChunk, 0, len(h.chunkCache)+len(chunks))
+	for _, chunk := range h.chunkCache {
+		if _, ok := pending[chunk.PageID]; ok {
+			continue
+		}
+		next = append(next, chunk)
+	}
+	next = append(next, chunks...)
+	h.chunkCache = next
+	clear(h.chunkPendingPages)
+	log.Printf("chunk cache updated: %d chunks (+%d pages)", len(next), len(pageIDs))
 	return h.chunkCache
 }
 
-// invalidateChunkCache marks the cache dirty so the next search reloads.
-func (h *Handler) invalidateChunkCache() {
+// invalidateChunkCache queues pages for refresh so the next search patches them in.
+func (h *Handler) invalidateChunkCache(pageIDs []int64) {
 	h.chunkMu.Lock()
-	h.chunkDirty = true
+	for _, pageID := range pageIDs {
+		if pageID == 0 {
+			continue
+		}
+		h.chunkPendingPages[pageID] = struct{}{}
+	}
 	h.chunkMu.Unlock()
 }
 

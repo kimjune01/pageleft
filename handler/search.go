@@ -73,7 +73,7 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	chunks := h.cachedChunks()
 	if len(chunks) > 0 {
 		pageCount, _ := h.db.PageCount()
-		results = search.SearchChunks(chunks, queryEmb, pageCount, limit)
+		results = search.SearchCachedChunks(chunks, queryEmb, pageCount, limit)
 	}
 
 	if len(results) == 0 {
@@ -289,4 +289,3 @@ func (h *Handler) handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(entries)
 }
-
