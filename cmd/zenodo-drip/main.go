@@ -100,7 +100,16 @@ type config struct {
 	Interval  time.Duration // pause between submissions (Zenodo crawl-delay is 10s)
 	Max       int           // stop after this many submissions (0 = unlimited)
 	DryRun    bool
+	Broad     bool // skip the compilability keyword filter, harvest the full publication* pool
 }
+
+// compilabilityQuery is ANDed onto the search by default. Zenodo's CC0+CC-BY-SA
+// "publication" pool is dominated by descriptive papers (species descriptions,
+// case reports, historical scans) that don't compile into anything an agent can
+// build from -- verified empirically: this filter shrinks the candidate pool
+// from ~687K to ~4.3K while biasing hard toward papers describing algorithms,
+// protocols, software, and reference implementations. -broad disables it.
+const compilabilityQuery = `(algorithm OR protocol OR reproducible OR implementation OR workflow OR software OR "open source" OR "reference implementation" OR toolkit OR specification OR "worked example")`
 
 func main() {
 	var cfg config
@@ -114,6 +123,7 @@ func main() {
 	flag.DurationVar(&cfg.Interval, "interval", 10*time.Second, "pause between submissions")
 	flag.IntVar(&cfg.Max, "max", 0, "stop after N submissions (0 = unlimited)")
 	flag.BoolVar(&cfg.DryRun, "dry-run", false, "list records without submitting")
+	flag.BoolVar(&cfg.Broad, "broad", false, "skip the compilability keyword filter and harvest the full publication* pool")
 	flag.Parse()
 
 	for _, l := range strings.Split(licenses, ",") {
@@ -158,6 +168,9 @@ func run(cfg config) (int, error) {
 			q := fmt.Sprintf(
 				`metadata.rights.id:"%s" AND metadata.resource_type.id:publication* AND filetype:pdf AND created:[%d-01-01 TO %d-12-31]`,
 				lic, year, year)
+			if !cfg.Broad {
+				q += " AND " + compilabilityQuery
+			}
 			for page := 1; ; page++ {
 				records, err := searchPage(cfg.ZenodoAPI, q, page)
 				if err != nil {
