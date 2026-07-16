@@ -23,7 +23,7 @@ var Version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: pageleft <crawl|reindex|serve|version|chunk-backfill|link-backfill|embed-backfill>\n")
+		fmt.Fprintf(os.Stderr, "usage: pageleft <crawl|reindex|serve|version|chunk-backfill|link-backfill|embed-backfill|prune-pages|prune-stale|prune-urls|seed-blocklist>\n")
 		os.Exit(1)
 	}
 
@@ -55,6 +55,8 @@ func main() {
 		cmdPruneStale(dbPath)
 	case "seed-blocklist":
 		cmdSeedBlocklist(dbPath)
+	case "prune-urls":
+		cmdPruneURLs(dbPath)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
@@ -468,6 +470,45 @@ func cmdSeedBlocklist(dbPath string) {
 		log.Fatalf("seed: %v", err)
 	}
 	log.Printf("seeded %d domains into bloom filter", n)
+}
+
+// cmdPruneURLs deletes indexed pages whose URL exactly matches a line in the
+// given file. Use for one-off removal of specific known-bad records (e.g. a
+// content cluster identified by manual/agent review) that a domain-level
+// blocklist can't target without also removing legitimate pages on the same
+// domain (zenodo.org hosts both, so PrunePages' predicate-based approach is
+// what makes exact-URL removal possible here).
+func cmdPruneURLs(dbPath string) {
+	if len(os.Args) < 3 {
+		log.Fatal("usage: pageleft prune-urls <urls-file>")
+	}
+	file := os.Args[2]
+
+	data, err := os.ReadFile(file)
+	if err != nil {
+		log.Fatalf("read urls file: %v", err)
+	}
+	targets := make(map[string]bool)
+	for _, line := range strings.Split(string(data), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			targets[line] = true
+		}
+	}
+	log.Printf("loaded %d target URLs", len(targets))
+
+	db, err := platform.NewDB(dbPath)
+	if err != nil {
+		log.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	before, _ := db.PageCount()
+	removed, err := db.PrunePages(func(u string) bool { return targets[u] })
+	if err != nil {
+		log.Fatalf("prune: %v", err)
+	}
+	after, _ := db.PageCount()
+	log.Printf("pruned %d pages (%d target URLs matched an indexed page), pages: %d -> %d", removed, removed, before, after)
 }
 
 func envOr(key, fallback string) string {
