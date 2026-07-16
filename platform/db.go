@@ -1290,12 +1290,29 @@ func (db *DB) SubmitQualityScore(pageID int64, score float64, model string, cont
 	}
 	defer rows.Close()
 
+	// minQualityScore floors each review's contribution to the product.
+	// The raw score is still stored as-submitted in quality_reviews above --
+	// this only protects the aggregate. Two reasons a real 0.0 can't be used
+	// directly: (1) it's absorbing in a product -- one 0.0 review among any
+	// number of others forces the geometric mean to exactly 0 forever, no
+	// later review can recover it; (2) ranking (search/ranking.go,
+	// chunk_cache.go) treats quality<=0 as "no reviews yet" and defaults to
+	// 1.0 (full weight) -- so a literal 0.0 aggregate doesn't suppress a
+	// page, it makes it rank as if it had a PERFECT score. Verified this
+	// live in production: three genuinely low-quality pages (a Wikibooks
+	// error page, two thin Wikifunctions stubs) had been scored 0.0 and
+	// were ranking with full quality weight as a result.
+	const minQualityScore = 0.01
+
 	product := 1.0
 	n := 0
 	for rows.Next() {
 		var s float64
 		if err := rows.Scan(&s); err != nil {
 			return fmt.Errorf("scan score: %w", err)
+		}
+		if s < minQualityScore {
+			s = minQualityScore
 		}
 		product *= s
 		n++
