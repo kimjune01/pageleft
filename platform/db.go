@@ -145,20 +145,34 @@ type ChunkWithPage struct {
 	LicenseType string
 }
 
-type CachedPage struct {
-	URL         string
-	Title       string
-	PageRank    float64
-	Quality     float64
-	Compilable  bool
-	LicenseType string
+// CachedChunk is the hot, resident-in-memory unit the search scan runs over.
+// Deliberately lean: no text, no URL/title/license strings. Those are
+// per-chunk (text) or per-page (url/title/license) data that only ~limit
+// results ever need per query -- holding them for the whole corpus scales
+// memory with corpus size for no benefit. HydrateChunks fetches them from
+// SQLite for just the final result set after ranking.
+type CachedChunk struct {
+	ChunkID    int64
+	PageID     int64
+	Embedding  []float32
+	PageRank   float64
+	Quality    float64
+	Compilable bool
+	// Domain is kept (not the full URL) because DPP reranking's same-source
+	// diversity penalty needs it, but a domain string ("zenodo.org") is a
+	// few bytes and low-cardinality versus a full URL -- cheap enough to
+	// hold per chunk without reintroducing the memory cost this cache
+	// exists to avoid.
+	Domain string
 }
 
-type CachedChunk struct {
-	PageID    int64
-	Text      string
-	Embedding []float32
-	Page      *CachedPage
+// HydratedChunk carries the display fields for one chunk, fetched on demand
+// for a final result set (see HydrateChunks).
+type HydratedChunk struct {
+	Text        string
+	PageURL     string
+	PageTitle   string
+	LicenseType string
 }
 
 type FrontierEntry struct {
@@ -1056,8 +1070,7 @@ func (db *DB) AllChunksWithPages() ([]ChunkWithPage, error) {
 
 func (db *DB) AllCachedChunks() ([]CachedChunk, error) {
 	rows, err := db.conn.Query(`
-		SELECT c.page_id, c.text, c.embedding,
-		       p.url, p.title, p.pagerank, p.quality, p.compilable, p.license_type
+		SELECT c.id, c.page_id, c.embedding, p.pagerank, p.quality, p.compilable, p.url
 		FROM chunks c
 		JOIN pages p ON p.id = c.page_id
 		WHERE c.embedding IS NOT NULL AND c.embedding != '[]' AND c.embedding != 'null'
@@ -1066,38 +1079,7 @@ func (db *DB) AllCachedChunks() ([]CachedChunk, error) {
 		return nil, err
 	}
 	defer rows.Close()
-
-	var out []CachedChunk
-	var currentPageID int64
-	var currentPage *CachedPage
-	for rows.Next() {
-		var chunk CachedChunk
-		var embJSON sql.NullString
-		var page CachedPage
-		if err := rows.Scan(&chunk.PageID, &chunk.Text, &embJSON,
-			&page.URL, &page.Title, &page.PageRank, &page.Quality, &page.Compilable, &page.LicenseType); err != nil {
-			return nil, err
-		}
-		if embJSON.Valid && embJSON.String != "" {
-			if err := json.Unmarshal([]byte(embJSON.String), &chunk.Embedding); err != nil {
-				return nil, err
-			}
-		}
-		if currentPage == nil || currentPageID != chunk.PageID {
-			currentPageID = chunk.PageID
-			currentPage = &CachedPage{
-				URL:         page.URL,
-				Title:       page.Title,
-				PageRank:    page.PageRank,
-				Quality:     page.Quality,
-				Compilable:  page.Compilable,
-				LicenseType: page.LicenseType,
-			}
-		}
-		chunk.Page = currentPage
-		out = append(out, chunk)
-	}
-	return out, nil
+	return scanCachedChunks(rows)
 }
 
 func (db *DB) CachedChunksForPages(pageIDs []int64) ([]CachedChunk, error) {
@@ -1113,8 +1095,7 @@ func (db *DB) CachedChunksForPages(pageIDs []int64) ([]CachedChunk, error) {
 	}
 
 	rows, err := db.conn.Query(`
-		SELECT c.page_id, c.text, c.embedding,
-		       p.url, p.title, p.pagerank, p.quality, p.compilable, p.license_type
+		SELECT c.id, c.page_id, c.embedding, p.pagerank, p.quality, p.compilable, p.url
 		FROM chunks c
 		JOIN pages p ON p.id = c.page_id
 		WHERE c.page_id IN (`+strings.Join(placeholders, ",")+`)
@@ -1124,16 +1105,24 @@ func (db *DB) CachedChunksForPages(pageIDs []int64) ([]CachedChunk, error) {
 		return nil, err
 	}
 	defer rows.Close()
+	return scanCachedChunks(rows)
+}
 
+// scanCachedChunks reads chunk rows and derives Domain from the page URL
+// without retaining the URL itself. Rows are ordered by page_id, so
+// consecutive chunks from the same page reuse one already-computed domain
+// string instead of re-parsing and re-allocating per chunk.
+func scanCachedChunks(rows *sql.Rows) ([]CachedChunk, error) {
 	var out []CachedChunk
 	var currentPageID int64
-	var currentPage *CachedPage
+	var currentDomain string
+	havePage := false
 	for rows.Next() {
 		var chunk CachedChunk
 		var embJSON sql.NullString
-		var page CachedPage
-		if err := rows.Scan(&chunk.PageID, &chunk.Text, &embJSON,
-			&page.URL, &page.Title, &page.PageRank, &page.Quality, &page.Compilable, &page.LicenseType); err != nil {
+		var pageURL string
+		if err := rows.Scan(&chunk.ChunkID, &chunk.PageID, &embJSON,
+			&chunk.PageRank, &chunk.Quality, &chunk.Compilable, &pageURL); err != nil {
 			return nil, err
 		}
 		if embJSON.Valid && embJSON.String != "" {
@@ -1141,19 +1130,65 @@ func (db *DB) CachedChunksForPages(pageIDs []int64) ([]CachedChunk, error) {
 				return nil, err
 			}
 		}
-		if currentPage == nil || currentPageID != chunk.PageID {
+		if !havePage || currentPageID != chunk.PageID {
 			currentPageID = chunk.PageID
-			currentPage = &CachedPage{
-				URL:         page.URL,
-				Title:       page.Title,
-				PageRank:    page.PageRank,
-				Quality:     page.Quality,
-				Compilable:  page.Compilable,
-				LicenseType: page.LicenseType,
-			}
+			currentDomain = extractDomain(pageURL)
+			havePage = true
 		}
-		chunk.Page = currentPage
+		chunk.Domain = currentDomain
 		out = append(out, chunk)
+	}
+	return out, nil
+}
+
+// extractDomain mirrors search.extractDomain (hostname, www.-stripped).
+// Duplicated rather than imported to avoid a platform->search dependency;
+// keep the two in sync if the normalization rule ever changes.
+func extractDomain(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	h := u.Hostname()
+	if len(h) > 4 && h[:4] == "www." {
+		h = h[4:]
+	}
+	return h
+}
+
+// HydrateChunks fetches display fields (text, page url/title/license) for a
+// small set of chunk IDs -- the final result set after ranking, not the
+// whole corpus. Missing IDs are simply absent from the returned map.
+func (db *DB) HydrateChunks(chunkIDs []int64) (map[int64]HydratedChunk, error) {
+	out := make(map[int64]HydratedChunk, len(chunkIDs))
+	if len(chunkIDs) == 0 {
+		return out, nil
+	}
+
+	placeholders := make([]string, len(chunkIDs))
+	args := make([]any, len(chunkIDs))
+	for i, id := range chunkIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	rows, err := db.conn.Query(`
+		SELECT c.id, c.text, p.url, p.title, p.license_type
+		FROM chunks c
+		JOIN pages p ON p.id = c.page_id
+		WHERE c.id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int64
+		var h HydratedChunk
+		if err := rows.Scan(&id, &h.Text, &h.PageURL, &h.PageTitle, &h.LicenseType); err != nil {
+			return nil, err
+		}
+		out[id] = h
 	}
 	return out, nil
 }

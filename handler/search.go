@@ -88,11 +88,28 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if compilableOnly {
 		filtered := results[:0]
 		for _, r := range results {
-			if r.Page.Compilable {
+			if r.Compilable {
 				filtered = append(filtered, r)
 			}
 		}
 		results = filtered
+	}
+
+	// Results from the lean chunk cache (SearchCachedChunks) carry a
+	// ChunkID instead of a populated Page -- hydrate display fields
+	// (text/url/title/license) from SQLite for just this final result set,
+	// not the whole corpus. Results from the page-level fallback (Search)
+	// already have Page set and are left alone.
+	var hydrateIDs []int64
+	for _, r := range results {
+		if r.Page == nil && r.ChunkID != 0 {
+			hydrateIDs = append(hydrateIDs, r.ChunkID)
+		}
+	}
+	hydrated, err := h.db.HydrateChunks(hydrateIDs)
+	if err != nil {
+		log.Printf("hydrate chunks failed: %v", err)
+		hydrated = map[int64]platform.HydratedChunk{}
 	}
 
 	// Build response
@@ -101,21 +118,27 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Total: len(results),
 	}
 	for _, r := range results {
-		snippet := r.Snippet
-		if snippet == "" {
-			snippet = r.Page.TextContent
-			if len(snippet) > 200 {
-				snippet = snippet[:200] + "..."
+		var url, title, license, snippet string
+		if r.Page != nil {
+			url, title, license = r.Page.URL, r.Page.Title, r.Page.LicenseType
+			snippet = r.Snippet
+			if snippet == "" {
+				snippet = r.Page.TextContent
+				if len(snippet) > 200 {
+					snippet = snippet[:200] + "..."
+				}
 			}
+		} else if h, ok := hydrated[r.ChunkID]; ok {
+			url, title, license, snippet = h.PageURL, h.PageTitle, h.LicenseType, h.Text
 		}
 		resp.Results = append(resp.Results, searchResult{
-			URL:           r.Page.URL,
-			Title:         r.Page.Title,
+			URL:           url,
+			Title:         title,
 			Snippet:       snippet,
-			License:       r.Page.LicenseType,
-			Compilable:    r.Page.Compilable,
+			License:       license,
+			Compilable:    r.Compilable,
 			SemanticScore: r.Similarity,
-			RankScore:     r.Page.PageRank,
+			RankScore:     r.PageRank,
 		})
 	}
 

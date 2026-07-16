@@ -23,6 +23,22 @@ type Result struct {
 	Similarity float64
 	FinalScore float64
 	Snippet    string
+	// ChunkID is set by SearchCachedChunks when Page/Snippet are left
+	// unhydrated (the lean cache doesn't carry display text) -- the caller
+	// hydrates Page/Snippet for just the final result set via
+	// platform.DB.HydrateChunks. Zero for paths that already populate Page
+	// directly (e.g. Search, SearchChunks).
+	ChunkID int64
+	// Domain backs dppRerank's same-source diversity penalty. Populated by
+	// every Search* function directly (not derived from Page.URL at rerank
+	// time) so SearchCachedChunks can supply it without holding a full URL
+	// in the hot cache.
+	Domain string
+	// PageRank/Compilable are duplicated here (also on Page, when Page is
+	// set) so callers that only need these scalars -- e.g. a compilable-only
+	// filter -- don't have to hydrate full page display data first.
+	PageRank   float64
+	Compilable bool
 	embedding  []float64 // used internally for DPP reranking
 }
 
@@ -56,6 +72,9 @@ func Search(pages []*platform.Page, queryEmb []float64, limit int) []Result {
 			Page:       p,
 			Similarity: sim,
 			FinalScore: sim * boost * quality * compilableBoost,
+			Domain:     extractDomain(p.URL),
+			PageRank:   p.PageRank,
+			Compilable: p.Compilable,
 			embedding:  p.Embedding,
 		})
 	}
@@ -129,6 +148,9 @@ func SearchChunks(chunks []platform.ChunkWithPage, queryEmb []float64, totalPage
 			Similarity: s.sim,
 			FinalScore: s.sim * boost * quality * compilableBoost,
 			Snippet:    s.chunk.Text,
+			Domain:     extractDomain(s.chunk.PageURL),
+			PageRank:   s.chunk.PageRank,
+			Compilable: s.chunk.Compilable,
 			embedding:  s.chunk.Embedding,
 		})
 	}
@@ -193,7 +215,7 @@ func dppRerank(candidates []Result, k int) []Result {
 			maxSim := 0.0
 			for _, j := range selected {
 				sim := CosineSim(candidates[i].embedding, candidates[j].embedding)
-				if sameSource(candidates[i].Page.URL, candidates[j].Page.URL) {
+				if candidates[i].Domain != "" && candidates[i].Domain == candidates[j].Domain {
 					sim = math.Min(1.0, sim+sourcePenalty)
 				}
 				if sim > maxSim {
@@ -224,12 +246,6 @@ func dppRerank(candidates []Result, k int) []Result {
 		results[i] = candidates[idx]
 	}
 	return results
-}
-
-func sameSource(a, b string) bool {
-	da := extractDomain(a)
-	db := extractDomain(b)
-	return da != "" && da == db
 }
 
 func extractDomain(rawURL string) string {

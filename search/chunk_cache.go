@@ -9,7 +9,9 @@ import (
 
 // SearchCachedChunks scans the compact in-memory chunk cache and keeps the
 // same ranking pipeline as SearchChunks while avoiding per-chunk page metadata
-// duplication in memory.
+// duplication in memory. Results come back with Page/Snippet unset and
+// ChunkID set instead -- the caller hydrates display fields for just the
+// final result set via platform.DB.HydrateChunks (see handler/search.go).
 func SearchCachedChunks(chunks []platform.CachedChunk, queryEmb []float64, totalPages int, limit int) []Result {
 	if len(chunks) == 0 || len(queryEmb) == 0 {
 		return nil
@@ -23,15 +25,14 @@ func SearchCachedChunks(chunks []platform.CachedChunk, queryEmb []float64, total
 	n := float64(totalPages)
 
 	type scored struct {
-		sim   float64
-		text  string
-		page  *platform.CachedPage
-		embed []float32
+		sim     float64
+		chunkID int64
+		chunk   platform.CachedChunk
 	}
 	best := make(map[int64]scored)
 
 	for _, c := range chunks {
-		if len(c.Embedding) == 0 || c.Page == nil {
+		if len(c.Embedding) == 0 {
 			continue
 		}
 		sim := cosineSimFloat32(query32, c.Embedding)
@@ -39,35 +40,39 @@ func SearchCachedChunks(chunks []platform.CachedChunk, queryEmb []float64, total
 			continue
 		}
 		if prev, ok := best[c.PageID]; !ok || sim > prev.sim {
-			best[c.PageID] = scored{sim: sim, text: c.Text, page: c.Page, embed: c.Embedding}
+			best[c.PageID] = scored{sim: sim, chunkID: c.ChunkID, chunk: c}
 		}
 	}
 
 	type candidate struct {
-		sim       float64
-		final     float64
-		text      string
-		page      *platform.CachedPage
-		embedding []float32
+		sim        float64
+		final      float64
+		chunkID    int64
+		domain     string
+		pageRank   float64
+		compilable bool
+		embedding  []float32
 	}
 
 	results := make([]candidate, 0, len(best))
 	for _, s := range best {
-		boost := 1.0 + math.Log(1.0+s.page.PageRank*n)
-		quality := s.page.Quality
+		boost := 1.0 + math.Log(1.0+s.chunk.PageRank*n)
+		quality := s.chunk.Quality
 		if quality <= 0 {
 			quality = 1.0
 		}
 		compilableBoost := 1.0
-		if s.page.Compilable {
+		if s.chunk.Compilable {
 			compilableBoost = 2.0
 		}
 		results = append(results, candidate{
-			sim:       s.sim,
-			final:     s.sim * boost * quality * compilableBoost,
-			text:      s.text,
-			page:      s.page,
-			embedding: s.embed,
+			sim:        s.sim,
+			final:      s.sim * boost * quality * compilableBoost,
+			chunkID:    s.chunkID,
+			domain:     s.chunk.Domain,
+			pageRank:   s.chunk.PageRank,
+			compilable: s.chunk.Compilable,
+			embedding:  s.chunk.Embedding,
 		})
 	}
 
@@ -83,17 +88,12 @@ func SearchCachedChunks(chunks []platform.CachedChunk, queryEmb []float64, total
 	rerank := make([]Result, 0, len(results))
 	for _, r := range results {
 		rerank = append(rerank, Result{
-			Page: &platform.Page{
-				URL:         r.page.URL,
-				Title:       r.page.Title,
-				PageRank:    r.page.PageRank,
-				Quality:     r.page.Quality,
-				Compilable:  r.page.Compilable,
-				LicenseType: r.page.LicenseType,
-			},
 			Similarity: r.sim,
 			FinalScore: r.final,
-			Snippet:    r.text,
+			ChunkID:    r.chunkID,
+			Domain:     r.domain,
+			PageRank:   r.pageRank,
+			Compilable: r.compilable,
 			embedding:  float32To64(r.embedding),
 		})
 	}
