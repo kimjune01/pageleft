@@ -155,9 +155,21 @@ func run(cfg config) (int, error) {
 		return 0, fmt.Errorf("load state: %w", err)
 	}
 
+	cursorPath := cfg.State + ".cursor"
+	cur, resuming, err := loadCursor(cursorPath)
+	if err != nil {
+		return 0, fmt.Errorf("load cursor: %w", err)
+	}
+
 	submitted := 0
 	for _, lic := range cfg.Licenses {
+		if resuming && lic != cur.License {
+			continue // haven't reached the checkpointed license yet
+		}
 		for year := cfg.YearFrom; year <= cfg.YearTo; year++ {
+			if resuming && lic == cur.License && year < cur.Year {
+				continue // haven't reached the checkpointed year yet
+			}
 			// filetype:pdf is a real precision filter, not just an
 			// optimization: verified empirically that roughly half of
 			// Zenodo's CC0 "publication" records have no PDF at all (many
@@ -171,10 +183,22 @@ func run(cfg config) (int, error) {
 			if !cfg.Broad {
 				q += " AND " + compilabilityQuery
 			}
-			for page := 1; ; page++ {
+			startPage := 1
+			if resuming && lic == cur.License && year == cur.Year {
+				// Resume on the exact page we were on. Records within it
+				// that are already in `done` get skipped for free below --
+				// re-fetching one page is cheap, re-scanning from page 1
+				// across every earlier bucket is not.
+				startPage = cur.Page
+			}
+			for page := startPage; ; page++ {
 				records, err := searchPage(cfg.ZenodoAPI, q, page)
 				if err != nil {
 					return submitted, fmt.Errorf("search %s %d p%d: %w", lic, year, page, err)
+				}
+				resuming = false // we've reached (or passed) the checkpoint; walk normally from here
+				if err := saveCursor(cursorPath, cursor{License: lic, Year: year, Page: page}); err != nil {
+					log.Printf("  save cursor failed: %v", err)
 				}
 				if len(records) == 0 {
 					break
@@ -452,4 +476,39 @@ func appendState(path, recordURL string) error {
 	defer f.Close()
 	_, err = f.WriteString(recordURL + "\n")
 	return err
+}
+
+// cursor is the license×year×page position of the last page fetched. It is
+// separate from the per-URL state file: state answers "is this record
+// done", cursor answers "where in the walk order are we", so a restart can
+// skip straight past every earlier bucket instead of re-paging through all
+// of it just to rediscover (via `done`) that it was already handled.
+type cursor struct {
+	License string `json:"license"`
+	Year    int    `json:"year"`
+	Page    int    `json:"page"`
+}
+
+// loadCursor returns (zero cursor, false, nil) if no cursor file exists yet.
+func loadCursor(path string) (cursor, bool, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return cursor{}, false, nil
+	}
+	if err != nil {
+		return cursor{}, false, err
+	}
+	var c cursor
+	if err := json.Unmarshal(data, &c); err != nil {
+		return cursor{}, false, err
+	}
+	return c, true, nil
+}
+
+func saveCursor(path string, c cursor) error {
+	data, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
 }
