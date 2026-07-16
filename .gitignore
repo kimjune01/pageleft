@@ -9,3 +9,5 @@ sidecar/.venv/
 infra/infra
 *.bloom
 *.state
+*.state.cursor
+zenodo-drip.log
