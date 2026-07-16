@@ -122,6 +122,17 @@ func (h *Handler) maybeReindex() {
 	}
 	h.lastReindexCount = current
 	go func() {
+		// An unrecovered panic in any goroutine kills the whole process --
+		// verified live in a sibling worker (cmd/zenodo-drip) where a
+		// malformed PDF panicked a background goroutine and took the whole
+		// program down. ComputePageRank runs over live, ever-growing,
+		// externally-contributed graph data; recover defensively rather
+		// than assume it can't happen here too.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("auto-reindex panicked (recovered): %v", r)
+			}
+		}()
 		log.Printf("auto-reindex: page count %d > 5%% threshold, recomputing PageRank", current)
 		if err := search.ComputePageRank(h.db); err != nil {
 			log.Printf("auto-reindex failed: %v", err)

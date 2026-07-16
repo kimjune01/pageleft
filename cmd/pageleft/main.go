@@ -135,7 +135,16 @@ func cmdServe(dbPath string) {
 	// PASSIVE won't block writers; it merges what it can.
 	go func() {
 		for range time.Tick(5 * time.Minute) {
-			db.WALCheckpoint()
+			// Recover per-tick, not per-goroutine-lifetime: a single
+			// panicking checkpoint must not silently end all future ones.
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("WAL checkpoint panicked (recovered): %v", r)
+					}
+				}()
+				db.WALCheckpoint()
+			}()
 		}
 	}()
 

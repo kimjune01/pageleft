@@ -391,6 +391,12 @@ func download(fileURL string) ([]byte, error) {
 // after d. The goroutine is leaked (the pdf library gives no way to cancel
 // mid-parse) but is bounded by process lifetime, and the caller treats a
 // timeout as a permanent skip so it never retries the same record.
+//
+// The goroutine recovers its own panics: ledongthuc/pdf panics (not just
+// hangs) on some malformed PDFs -- observed live, a corrupt xref table
+// crashing NewReader with an unrecovered panic mid-parse. A panic in any
+// goroutine kills the whole process in Go, so every one of these was taking
+// down the entire drip, not just failing the one record.
 func extractPDFTextTimeout(data []byte, d time.Duration) (string, error) {
 	type result struct {
 		text string
@@ -398,6 +404,11 @@ func extractPDFTextTimeout(data []byte, d time.Duration) (string, error) {
 	}
 	done := make(chan result, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- result{"", fmt.Errorf("panic during extraction: %v", r)}
+			}
+		}()
 		text, err := extractPDFText(data)
 		done <- result{text, err}
 	}()
