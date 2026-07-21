@@ -285,14 +285,26 @@ func isBinaryURL(rawURL string) bool {
 var binaryExtensions []string
 
 // CanonicalPageURL normalizes a URL for storage in the pages table:
-// strips tracking params and collapses forge deep paths to owner/repo.
-// Does NOT upgrade scheme (http stays http) so HTTP-only sites and tests
-// keep working. Frontier dedup uses platform.NormalizeURL which is stricter.
+// strips tracking params, strips a "www." host prefix, and collapses forge
+// deep paths to owner/repo. Does NOT upgrade scheme (http stays http) so
+// HTTP-only sites and tests keep working. Frontier dedup uses
+// platform.NormalizeURL which is stricter.
+//
+// www.-stripping was missing here even though ExtractDomain (used for DPP
+// diversity, bloom matching, etc.) already treats www./non-www. as the same
+// domain -- meaning the same page under both forms stored as two separate
+// rows, splitting PageRank/quality signal and duplicating search results.
+// Found live: 737 duplicate pairs (1,474 rows, ~5.5% of the corpus at the
+// time) via `cmd/pageleft dedupe-www`.
 func CanonicalPageURL(rawURL string) string {
 	stripped := platform.StripTrackingParams(rawURL)
 	if owner, repo, ok := parseForgeURL(stripped); ok {
 		host := ExtractDomain(stripped)
 		return "https://" + host + "/" + owner + "/" + repo
+	}
+	if u, err := url.Parse(stripped); err == nil && strings.HasPrefix(strings.ToLower(u.Hostname()), "www.") {
+		u.Host = strings.TrimPrefix(strings.ToLower(u.Host), "www.")
+		return u.String()
 	}
 	return stripped
 }

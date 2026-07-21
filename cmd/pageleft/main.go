@@ -23,7 +23,7 @@ var Version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: pageleft <crawl|reindex|serve|version|chunk-backfill|link-backfill|embed-backfill|prune-pages|prune-stale|prune-urls|seed-blocklist>\n")
+		fmt.Fprintf(os.Stderr, "usage: pageleft <crawl|reindex|serve|version|chunk-backfill|link-backfill|embed-backfill|prune-pages|prune-stale|prune-urls|dedupe-www|seed-blocklist>\n")
 		os.Exit(1)
 	}
 
@@ -57,6 +57,8 @@ func main() {
 		cmdSeedBlocklist(dbPath)
 	case "prune-urls":
 		cmdPruneURLs(dbPath)
+	case "dedupe-www":
+		cmdDedupeWWW(dbPath)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
@@ -151,11 +153,7 @@ func cmdServe(dbPath string) {
 	}()
 
 	embedder := platform.NewEmbedder()
-	if embedder.IsLocal() {
-		log.Printf("embedder: local (127.0.0.1:8081)")
-	} else {
-		log.Printf("embedder: HuggingFace Inference API")
-	}
+	log.Printf("embedder: HuggingFace Inference API")
 	h := handler.New(db, embedder, Version)
 
 	addr := ":" + *port
@@ -509,6 +507,26 @@ func cmdPruneURLs(dbPath string) {
 	}
 	after, _ := db.PageCount()
 	log.Printf("pruned %d pages (%d target URLs matched an indexed page), pages: %d -> %d", removed, removed, before, after)
+}
+
+// cmdDedupeWWW fixes www./non-www duplicate pages: merges true duplicates
+// (keeping whichever copy has more chunks) and renames singleton www. pages
+// to their canonical non-www URL. See platform.DB.DedupeWWW.
+func cmdDedupeWWW(dbPath string) {
+	db, err := platform.NewDB(dbPath)
+	if err != nil {
+		log.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	before, _ := db.PageCount()
+	result, err := db.DedupeWWW()
+	if err != nil {
+		log.Fatalf("dedupe: %v", err)
+	}
+	after, _ := db.PageCount()
+	log.Printf("merged %d duplicate pairs, renamed %d singletons, pages: %d -> %d",
+		result.Merged, result.Renamed, before, after)
 }
 
 func envOr(key, fallback string) string {

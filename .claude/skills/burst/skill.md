@@ -32,25 +32,7 @@ aws ec2 wait instance-status-ok --instance-ids $INSTANCE_ID
 
 Verify: `curl -sf https://pageleft.cc/api/stats` and `ssh $SERVER "free -h"`.
 
-### 2. Start embed sidecar
-
-The local embedding server must be running before the pageleft server starts,
-so the server detects it at boot. If the sidecar isn't already running:
-
-```
-ssh $SERVER "nohup python3 -u /home/ubuntu/embed_server.py > /tmp/embed_server.log 2>&1 &"
-```
-
-Wait for it to respond on port 8081, then restart pageleft-server so it
-picks up the local embedder:
-
-```
-ssh $SERVER "sudo systemctl restart pageleft-server"
-```
-
-Verify the server log says `embedder: local (127.0.0.1:8081)`.
-
-### 3. Start workers
+### 2. Start workers
 
 Run three workers in parallel as background processes. Each worker must:
 - Use exponential backoff (base 2s, max 120s)
@@ -68,7 +50,7 @@ because page content contains curly braces.
 **Embed worker**: Fetch chunks from `GET /api/work/embed?limit=32`, embed
 via `POST /api/embed`, submit to `POST /api/contribute/embeddings`.
 
-### 4. Monitor
+### 3. Monitor
 
 Periodically report stats: `curl -sf https://pageleft.cc/api/stats`.
 Sample recent pages to check content quality. Watch for:
@@ -78,7 +60,7 @@ Sample recent pages to check content quality. Watch for:
 
 Let the user decide when to stop. They may want to run for minutes or hours.
 
-### 5. Wind down
+### 4. Wind down
 
 When the user says stop:
 
@@ -99,7 +81,12 @@ aws ec2 wait instance-status-ok --instance-ids $INSTANCE_ID
 
 ## Notes
 
-- The embed sidecar uses ~500MB RAM for the model. Only viable on t4g.large.
+- Embed worker calls the public `/api/embed` endpoint, which proxies to the
+  remote HuggingFace Inference API. There is no local embed sidecar — one
+  used to run alongside the server, but it never actually worked (a
+  three-way schema mismatch meant the local-embedder probe always failed
+  silently and every embed call went to HF regardless) and was removed
+  rather than fixed, since HF latency was never a reported bottleneck.
 - Quality worker uses `ANTHROPIC_API_KEY` from the local environment.
 - The crawl worker goes through the server API, not direct DB access.
 - If server becomes unresponsive (load > 10), workers back off automatically.

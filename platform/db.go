@@ -945,6 +945,96 @@ func (db *DB) PrunePages(shouldDelete URLFilter) (int64, error) {
 	return int64(len(toDelete)), nil
 }
 
+// DedupeWWWResult summarizes one DedupeWWW pass.
+type DedupeWWWResult struct {
+	Merged  int // true duplicate pairs: richer copy (by chunk count) kept, other deleted
+	Renamed int // singleton www. pages with no non-www sibling, renamed in place
+}
+
+// DedupeWWW fixes a gap CanonicalPageURL didn't previously close: a
+// "www." URL and its non-www counterpart used to be stored as two separate
+// page rows, splitting PageRank/quality signal and duplicating search
+// results for the exact same page. For every www.-prefixed page: if a
+// non-www sibling already exists, keep whichever copy has more chunks and
+// delete the other (ties keep the already-canonical non-www copy); if no
+// sibling exists, just rename the row's URL in place -- nothing to lose,
+// nothing to merge. Must run with no concurrent writers (same convention
+// as PrunePages-family commands: stop the server first).
+func (db *DB) DedupeWWW() (DedupeWWWResult, error) {
+	var result DedupeWWWResult
+
+	rows, err := db.conn.Query("SELECT id, url FROM pages")
+	if err != nil {
+		return result, err
+	}
+	type pageRow struct {
+		id  int64
+		url string
+	}
+	var all []pageRow
+	for rows.Next() {
+		var r pageRow
+		if err := rows.Scan(&r.id, &r.url); err != nil {
+			rows.Close()
+			return result, err
+		}
+		all = append(all, r)
+	}
+	rows.Close()
+
+	byURL := make(map[string]int64, len(all))
+	for _, r := range all {
+		byURL[r.url] = r.id
+	}
+
+	for _, r := range all {
+		canon, isWWW := wwwCanonical(r.url)
+		if !isWWW || canon == r.url {
+			continue
+		}
+		siblingID, exists := byURL[canon]
+		if !exists {
+			db.conn.Exec("UPDATE pages SET url = ? WHERE id = ?", canon, r.id)
+			byURL[canon] = r.id
+			result.Renamed++
+			continue
+		}
+
+		var wwwChunks, siblingChunks int
+		db.conn.QueryRow("SELECT COUNT(*) FROM chunks WHERE page_id = ?", r.id).Scan(&wwwChunks)
+		db.conn.QueryRow("SELECT COUNT(*) FROM chunks WHERE page_id = ?", siblingID).Scan(&siblingChunks)
+
+		loserID, winnerID := siblingID, r.id
+		if wwwChunks <= siblingChunks {
+			loserID, winnerID = r.id, siblingID
+		}
+		db.conn.Exec("DELETE FROM chunks WHERE page_id = ?", loserID)
+		db.conn.Exec("DELETE FROM links WHERE from_page_id = ? OR to_page_id = ?", loserID, loserID)
+		db.conn.Exec("DELETE FROM quality_reviews WHERE page_id = ?", loserID)
+		db.conn.Exec("DELETE FROM pages WHERE id = ?", loserID)
+		db.conn.Exec("UPDATE pages SET url = ? WHERE id = ?", canon, winnerID)
+		byURL[canon] = winnerID
+		result.Merged++
+	}
+
+	return result, nil
+}
+
+// wwwCanonical strips a "www." host prefix. Returns (rawURL, false) if the
+// URL doesn't parse or has no www. prefix to strip.
+func wwwCanonical(rawURL string) (string, bool) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL, false
+	}
+	host := strings.ToLower(u.Hostname())
+	if !strings.HasPrefix(host, "www.") {
+		return rawURL, false
+	}
+	u.Host = strings.TrimPrefix(strings.ToLower(u.Host), "www.")
+	return u.String(), true
+}
+
 // scoredFrontier fetches frontier entries, overfetches 3x, scores with
 // log(1 + inbound) * (1 + noise), sorts, and returns top `limit`.
 // The noise term shuffles entries within the same inbound tier,
